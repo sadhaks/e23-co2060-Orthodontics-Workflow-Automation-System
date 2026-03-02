@@ -8,7 +8,8 @@ const {
   transaction
 } = require('../config/database');
 const { logAuditEvent } = require('../middleware/errorHandler');
-const { requirePermission, OBJECT_TYPES, PERMISSIONS } = require('../middleware/accessControl');
+const { sendInitialPasswordEmail } = require('../services/emailService');
+const { generateTemporaryPassword } = require('../utils/password');
 
 // Get all users (Admin only)
 const getUsers = async (req, res) => {
@@ -153,9 +154,14 @@ const createUser = async (req, res) => {
       });
     }
 
+    const providedPassword = typeof userData.password === 'string' && userData.password.trim()
+      ? userData.password.trim()
+      : null;
+    const temporaryPassword = providedPassword || generateTemporaryPassword();
+
     // Hash password
     const saltRounds = 12;
-    const passwordHash = bcrypt.hashSync(userData.password, saltRounds);
+    const passwordHash = await bcrypt.hash(temporaryPassword, saltRounds);
 
     // Prepare user data
     const newUserData = {
@@ -164,7 +170,9 @@ const createUser = async (req, res) => {
       password_hash: passwordHash,
       role: userData.role,
       department: userData.department || null,
-      status: userData.status || 'ACTIVE'
+      status: userData.status || 'ACTIVE',
+      must_change_password: !providedPassword,
+      password_changed_at: providedPassword ? new Date() : null
     };
 
     // Create user
@@ -173,7 +181,8 @@ const createUser = async (req, res) => {
     await logAuditEvent(req.user.id, 'CREATE', 'USER', userId, null, {
       name: userData.name,
       email: userData.email,
-      role: userData.role
+      role: userData.role,
+      password_mode: providedPassword ? 'provided' : 'generated_email'
     });
 
     // Return created user without password hash
@@ -182,9 +191,27 @@ const createUser = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'User created successfully',
+      message: providedPassword
+        ? 'User created successfully'
+        : 'User created successfully. Sending temporary password email in background.',
       data: userWithoutPassword
     });
+
+    // Send email asynchronously so admin UI gets immediate response.
+    if (!providedPassword) {
+      setImmediate(async () => {
+        try {
+          await sendInitialPasswordEmail({
+            to: userData.email,
+            name: userData.name,
+            temporaryPassword,
+            isReset: false
+          });
+        } catch (emailError) {
+          console.error(`Async initial-password email failed for user ${userId}:`, emailError.message);
+        }
+      });
+    }
   } catch (error) {
     console.error('Create user error:', error);
     res.status(500).json({
@@ -220,10 +247,13 @@ const updateUser = async (req, res) => {
       }
     }
 
-    // If updating password, hash it
+    // Backward-compatible direct password update for existing automation flows.
+    // Preferred admin flow is resetUserPassword(), which emails a temporary password.
     if (updateData.password) {
       const saltRounds = 12;
       updateData.password_hash = bcrypt.hashSync(updateData.password, saltRounds);
+      updateData.must_change_password = false;
+      updateData.password_changed_at = new Date();
       delete updateData.password;
     }
 
@@ -246,6 +276,66 @@ const updateUser = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error'
+    });
+  }
+};
+
+// Reset user password and email a temporary password (Admin only)
+const resetUserPassword = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existingUser = await findOne('users', { id });
+    if (!existingUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const temporaryPassword = generateTemporaryPassword();
+    const passwordHash = bcrypt.hashSync(temporaryPassword, 12);
+
+    const previousState = {
+      password_hash: existingUser.password_hash,
+      must_change_password: Boolean(existingUser.must_change_password),
+      password_changed_at: existingUser.password_changed_at || null
+    };
+
+    await update('users', {
+      password_hash: passwordHash,
+      must_change_password: true,
+      password_changed_at: null
+    }, { id });
+
+    try {
+      await sendInitialPasswordEmail({
+        to: existingUser.email,
+        name: existingUser.name,
+        temporaryPassword,
+        isReset: true
+      });
+    } catch (emailError) {
+      await update('users', previousState, { id });
+      throw new Error(`Failed to send reset email: ${emailError.message}`);
+    }
+
+    await update('refresh_tokens', { is_revoked: true }, { user_id: id });
+
+    await logAuditEvent(req.user.id, 'PASSWORD_RESET', 'USER', id, null, {
+      reset_at: new Date(),
+      email: existingUser.email
+    });
+
+    return res.json({
+      success: true,
+      message: 'Temporary password sent to user email. User must change password on next login.'
+    });
+  } catch (error) {
+    console.error('Reset user password error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error'
     });
   }
 };
@@ -502,6 +592,7 @@ module.exports = {
   getUserById,
   createUser,
   updateUser,
+  resetUserPassword,
   deleteUser,
   getUserStats,
   getStaffDirectory

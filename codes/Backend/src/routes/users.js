@@ -49,6 +49,12 @@ router.put('/:id',
   asyncHandler(userController.updateUser)
 );
 
+// POST /api/users/:id/reset-password - Admin-generated reset password sent by email
+router.post('/:id/reset-password',
+  requirePermission(OBJECT_TYPES.USER_ACCOUNTS, PERMISSIONS.UPDATE),
+  asyncHandler(userController.resetUserPassword)
+);
+
 // DELETE /api/users/:id - Delete user (Admin only)
 router.delete('/:id', 
   requirePermission(OBJECT_TYPES.USER_ACCOUNTS, PERMISSIONS.DELETE),

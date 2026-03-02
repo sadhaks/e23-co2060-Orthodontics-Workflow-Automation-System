@@ -34,6 +34,27 @@ const testConnection = async () => {
 
 // Ensure non-destructive RBAC schema additions exist
 const ensureAccessControlSchema = async () => {
+  const userColumns = await query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'users'
+  `);
+  const userColumnSet = new Set(userColumns.map((row) => row.COLUMN_NAME));
+
+  if (!userColumnSet.has('must_change_password')) {
+    await query('ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT FALSE AFTER status');
+  }
+  if (!userColumnSet.has('password_changed_at')) {
+    await query('ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP NULL DEFAULT NULL AFTER must_change_password');
+  }
+  if (!userColumnSet.has('last_login')) {
+    await query('ALTER TABLE users ADD COLUMN last_login TIMESTAMP NULL DEFAULT NULL AFTER password_changed_at');
+  }
+  if (!userColumnSet.has('last_activity_at')) {
+    await query('ALTER TABLE users ADD COLUMN last_activity_at TIMESTAMP NULL DEFAULT NULL AFTER last_login');
+  }
+
   // Patient-level assignment relation used for instance access control
   await query(`
     CREATE TABLE IF NOT EXISTS patient_assignments (
@@ -78,6 +99,55 @@ const ensureAccessControlSchema = async () => {
       UNIQUE KEY uniq_patient_tooth (patient_id, tooth_number),
       INDEX idx_dental_patient (patient_id),
       INDEX idx_dental_status (status)
+    )
+  `);
+
+  // Per-patient customized dental chart entries (adult + milk teeth)
+  await query(`
+    CREATE TABLE IF NOT EXISTS dental_chart_custom_entries (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      patient_id INT NOT NULL,
+      tooth_code VARCHAR(32) NOT NULL,
+      dentition ENUM('ADULT', 'MILK') NOT NULL,
+      notation_x VARCHAR(8) NOT NULL,
+      notation_y VARCHAR(8) NOT NULL,
+      status ENUM('HEALTHY', 'PATHOLOGY', 'PLANNED', 'TREATED', 'MISSING') NOT NULL DEFAULT 'HEALTHY',
+      is_pathology BOOLEAN NOT NULL DEFAULT FALSE,
+      is_planned BOOLEAN NOT NULL DEFAULT FALSE,
+      is_treated BOOLEAN NOT NULL DEFAULT FALSE,
+      is_missing BOOLEAN NOT NULL DEFAULT FALSE,
+      pathology VARCHAR(500) NULL,
+      treatment VARCHAR(500) NULL,
+      event_date DATE NULL,
+      updated_by INT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE RESTRICT,
+      UNIQUE KEY uniq_patient_custom_tooth (patient_id, tooth_code),
+      INDEX idx_custom_dental_patient (patient_id),
+      INDEX idx_custom_dental_dentition (dentition),
+      INDEX idx_custom_dental_status (status)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS dental_chart_versions (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      patient_id INT NOT NULL,
+      version_label VARCHAR(255) NOT NULL,
+      snapshot_data JSON NOT NULL,
+      entry_count INT NOT NULL DEFAULT 0,
+      annotated_by INT NOT NULL,
+      deleted_at TIMESTAMP NULL DEFAULT NULL,
+      deleted_by INT NULL DEFAULT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+      FOREIGN KEY (annotated_by) REFERENCES users(id) ON DELETE RESTRICT,
+      INDEX idx_dental_chart_versions_patient (patient_id),
+      INDEX idx_dental_chart_versions_deleted_at (deleted_at),
+      INDEX idx_dental_chart_versions_created_at (created_at)
     )
   `);
 
@@ -142,6 +212,20 @@ const ensureAccessControlSchema = async () => {
   if (!inventoryColumnSet.has('last_updated')) {
     await query('ALTER TABLE inventory_items ADD COLUMN last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
   }
+  if (!inventoryColumnSet.has('deleted_at')) {
+    await query('ALTER TABLE inventory_items ADD COLUMN deleted_at TIMESTAMP NULL DEFAULT NULL');
+    await query('CREATE INDEX idx_inventory_items_deleted_at ON inventory_items (deleted_at)');
+  }
+  if (!inventoryColumnSet.has('deleted_by')) {
+    await query('ALTER TABLE inventory_items ADD COLUMN deleted_by INT NULL DEFAULT NULL');
+  }
+  if (!inventoryColumnSet.has('purged_at')) {
+    await query('ALTER TABLE inventory_items ADD COLUMN purged_at TIMESTAMP NULL DEFAULT NULL');
+    await query('CREATE INDEX idx_inventory_items_purged_at ON inventory_items (purged_at)');
+  }
+  if (!inventoryColumnSet.has('purged_by')) {
+    await query('ALTER TABLE inventory_items ADD COLUMN purged_by INT NULL DEFAULT NULL');
+  }
 
   await query(`
     CREATE TABLE IF NOT EXISTS patient_histories (
@@ -157,6 +241,54 @@ const ensureAccessControlSchema = async () => {
       INDEX idx_patient_history_patient (patient_id)
     )
   `);
+
+  const clinicalNoteColumns = await query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'clinical_notes'
+  `);
+  const clinicalNoteColumnSet = new Set(clinicalNoteColumns.map((row) => row.COLUMN_NAME));
+
+  if (!clinicalNoteColumnSet.has('plan_procedure')) {
+    await query('ALTER TABLE clinical_notes ADD COLUMN plan_procedure VARCHAR(255) NULL AFTER note_type');
+  }
+  if (!clinicalNoteColumnSet.has('planned_for')) {
+    await query('ALTER TABLE clinical_notes ADD COLUMN planned_for DATETIME NULL AFTER plan_procedure');
+  }
+  if (!clinicalNoteColumnSet.has('executed_at')) {
+    await query('ALTER TABLE clinical_notes ADD COLUMN executed_at DATETIME NULL AFTER planned_for');
+  }
+  if (!clinicalNoteColumnSet.has('execution_status')) {
+    await query(`ALTER TABLE clinical_notes ADD COLUMN execution_status ENUM('PLANNED', 'IN_PROGRESS', 'COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED') NULL AFTER executed_at`);
+  }
+  if (!clinicalNoteColumnSet.has('outcome_notes')) {
+    await query('ALTER TABLE clinical_notes ADD COLUMN outcome_notes TEXT NULL AFTER execution_status');
+  }
+  if (!clinicalNoteColumnSet.has('deleted_at')) {
+    await query('ALTER TABLE clinical_notes ADD COLUMN deleted_at TIMESTAMP NULL DEFAULT NULL AFTER outcome_notes');
+    await query('CREATE INDEX idx_clinical_notes_deleted_at ON clinical_notes (deleted_at)');
+  }
+  if (!clinicalNoteColumnSet.has('deleted_by')) {
+    await query('ALTER TABLE clinical_notes ADD COLUMN deleted_by INT NULL DEFAULT NULL AFTER deleted_at');
+  }
+
+  const noteTypeRows = await query(`
+    SELECT COLUMN_TYPE
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'clinical_notes'
+      AND COLUMN_NAME = 'note_type'
+    LIMIT 1
+  `);
+  const noteTypeColumnType = noteTypeRows[0]?.COLUMN_TYPE || '';
+  if (noteTypeColumnType && !noteTypeColumnType.includes('DIAGNOSIS')) {
+    await query(`
+      ALTER TABLE clinical_notes
+      MODIFY COLUMN note_type ENUM('TREATMENT', 'OBSERVATION', 'PROGRESS', 'SUPERVISOR_REVIEW', 'DIAGNOSIS')
+      DEFAULT 'TREATMENT'
+    `);
+  }
 
   const visitStatusColumns = await query(`
     SELECT COLUMN_TYPE
@@ -174,6 +306,31 @@ const ensureAccessControlSchema = async () => {
       MODIFY COLUMN status ENUM('SCHEDULED', 'COMPLETED', 'CANCELLED', 'DID_NOT_ATTEND')
       DEFAULT 'SCHEDULED'
     `);
+  }
+
+  const visitColumns = await query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'visits'
+  `);
+  const visitColumnSet = new Set(visitColumns.map((row) => row.COLUMN_NAME));
+  if (!visitColumnSet.has('reminder_sent_at')) {
+    await query('ALTER TABLE visits ADD COLUMN reminder_sent_at DATETIME NULL AFTER notes');
+  }
+  if (!visitColumnSet.has('reminder_source')) {
+    await query(`ALTER TABLE visits ADD COLUMN reminder_source ENUM('MANUAL', 'AUTO') NULL AFTER reminder_sent_at`);
+  }
+  const reminderIndexRows = await query(`
+    SELECT INDEX_NAME
+    FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'visits'
+      AND INDEX_NAME = 'idx_visits_reminder_window'
+    LIMIT 1
+  `);
+  if (!reminderIndexRows.length) {
+    await query('CREATE INDEX idx_visits_reminder_window ON visits (status, reminder_sent_at, visit_date)');
   }
 };
 

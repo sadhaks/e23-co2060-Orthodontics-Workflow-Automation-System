@@ -14,6 +14,7 @@ import {
   Line,
 } from 'recharts';
 import { apiService } from '../services/api';
+import { toast } from 'sonner';
 
 const StatCard = ({ title, value, icon: Icon, className = '' }: { title: string; value: string | number; icon: any; className?: string }) => (
   <Card className={`p-6 ${className}`}>
@@ -40,8 +41,12 @@ export function DashboardPage() {
   const [caseStats, setCaseStats] = useState<any>(null);
   const [inventoryStats, setInventoryStats] = useState<any>(null);
   const [adminDashboard, setAdminDashboard] = useState<any>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const loadDashboard = async () => {
+  const loadDashboard = async (manual = false) => {
+    const refreshStartedAt = manual ? Date.now() : 0;
+    let succeeded = false;
+    if (manual) setRefreshing(true);
     setLoading(true);
     setError(null);
 
@@ -72,10 +77,21 @@ export function DashboardPage() {
       setCaseStats(c?.overview || null);
       setInventoryStats(i?.overview || null);
       setAdminDashboard(admin);
+      succeeded = true;
     } catch (err: any) {
       setError(err?.message || 'Failed to load dashboard');
+      if (manual) toast.error(err?.message || 'Failed to refresh dashboard');
     } finally {
       setLoading(false);
+      if (manual) {
+        const elapsed = Date.now() - refreshStartedAt;
+        const minVisibleMs = 650;
+        if (elapsed < minVisibleMs) {
+          await new Promise((resolve) => setTimeout(resolve, minVisibleMs - elapsed));
+        }
+        setRefreshing(false);
+        if (succeeded) toast.success('Dashboard refreshed');
+      }
     }
   };
 
@@ -107,8 +123,14 @@ export function DashboardPage() {
           <h2 className="text-2xl font-bold text-gray-900">Welcome back, {user?.name}</h2>
           <p className="text-gray-500">Live operational dashboard.</p>
         </header>
-        <Button variant="secondary" className="flex items-center gap-2" onClick={loadDashboard}>
-          <RefreshCcw className="w-4 h-4" /> Refresh
+        <Button
+          variant="secondary"
+          className={`flex items-center gap-2 transition-all ${refreshing ? 'ring-2 ring-blue-200 bg-blue-50 border-blue-200 text-blue-700' : ''}`}
+          onClick={() => loadDashboard(true)}
+          disabled={refreshing}
+          aria-busy={refreshing}
+        >
+          <RefreshCcw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> {refreshing ? 'Refreshing...' : 'Refresh'}
         </Button>
       </div>
 

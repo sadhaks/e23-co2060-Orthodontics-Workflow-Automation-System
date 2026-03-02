@@ -52,10 +52,7 @@ export function StudentCasesPage() {
     loadCases();
   }, [statusFilter]);
 
-  const myCases = useMemo(() => {
-    if (user?.role !== 'STUDENT') return rows;
-    return rows.filter((r) => r.student_name === user.name);
-  }, [rows, user?.role, user?.name]);
+  const myCases = useMemo(() => rows, [rows]);
 
   const statusVariant = (status: CaseRow['status']) => {
     if (status === 'VERIFIED') return 'success';

@@ -42,6 +42,12 @@ const schemas = {
     })
   }),
 
+  googleLogin: Joi.object({
+    idToken: Joi.string().required().messages({
+      'any.required': 'Google ID token is required'
+    })
+  }),
+
   changePassword: Joi.object({
     currentPassword: Joi.string().min(6).required().messages({
       'string.min': 'Current password must be at least 6 characters long',
@@ -65,10 +71,9 @@ const schemas = {
       'string.email': 'Please provide a valid email address',
       'any.required': 'Email is required'
     }),
-    password: Joi.string().min(8).pattern(new RegExp('^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)')).required().messages({
+    password: Joi.string().min(8).pattern(new RegExp('^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)')).optional().messages({
       'string.min': 'Password must be at least 8 characters long',
-      'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, and one number',
-      'any.required': 'Password is required'
+      'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, and one number'
     }),
     role: Joi.string().valid('ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'STUDENT', 'RECEPTION').required().messages({
       'any.only': 'Invalid role specified',
@@ -126,6 +131,7 @@ const schemas = {
   updatePatient: Joi.object({
     first_name: Joi.string().min(2).max(255).optional(),
     last_name: Joi.string().min(2).max(255).optional(),
+    registration_date: Joi.date().max('now').optional(),
     date_of_birth: Joi.date().max('now').optional(),
     age: Joi.number().integer().min(0).max(130).optional(),
     gender: Joi.string().valid('MALE', 'FEMALE', 'OTHER').optional(),
@@ -139,15 +145,25 @@ const schemas = {
     status: Joi.string().valid('ACTIVE', 'COMPLETED', 'CONSULTATION', 'MAINTENANCE').optional()
   }).min(1),
 
-  assignPatientMember: Joi.object({
-    user_id: Joi.number().integer().positive().required().messages({
-      'any.required': 'user_id is required'
+  assignPatientMember: Joi.alternatives().try(
+    Joi.object({
+      user_id: Joi.number().integer().positive().required().messages({
+        'any.required': 'user_id is required'
+      }),
+      assignment_role: Joi.string().valid('ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'STUDENT').required().messages({
+        'any.only': 'assignment_role must be ORTHODONTIST, DENTAL_SURGEON, NURSE, or STUDENT',
+        'any.required': 'assignment_role is required'
+      })
     }),
-    assignment_role: Joi.string().valid('ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'STUDENT').required().messages({
-      'any.only': 'assignment_role must be ORTHODONTIST, DENTAL_SURGEON, NURSE, or STUDENT',
-      'any.required': 'assignment_role is required'
+    Joi.object({
+      assignments: Joi.array().min(1).items(
+        Joi.object({
+          user_id: Joi.number().integer().positive().required(),
+          assignment_role: Joi.string().valid('ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'STUDENT').required()
+        })
+      ).required()
     })
-  }),
+  ),
 
   updatePatientHistory: Joi.object({
     history: Joi.object().required().messages({
@@ -183,13 +199,23 @@ const schemas = {
       'string.max': 'Note content cannot exceed 5000 characters',
       'any.required': 'Note content is required'
     }),
-    note_type: Joi.string().valid('TREATMENT', 'OBSERVATION', 'PROGRESS', 'SUPERVISOR_REVIEW').optional()
+    note_type: Joi.string().valid('TREATMENT', 'OBSERVATION', 'PROGRESS', 'SUPERVISOR_REVIEW', 'DIAGNOSIS').optional(),
+    plan_procedure: Joi.string().max(255).allow('').optional(),
+    planned_for: Joi.date().optional(),
+    executed_at: Joi.date().optional(),
+    execution_status: Joi.string().valid('PLANNED', 'IN_PROGRESS', 'COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED').optional(),
+    outcome_notes: Joi.string().max(5000).allow('').optional()
   }),
 
   updateClinicalNote: Joi.object({
     content: Joi.string().min(1).max(5000).optional(),
-    note_type: Joi.string().valid('TREATMENT', 'OBSERVATION', 'PROGRESS', 'SUPERVISOR_REVIEW').optional(),
-    is_verified: Joi.boolean().optional()
+    note_type: Joi.string().valid('TREATMENT', 'OBSERVATION', 'PROGRESS', 'SUPERVISOR_REVIEW', 'DIAGNOSIS').optional(),
+    is_verified: Joi.boolean().optional(),
+    plan_procedure: Joi.string().max(255).allow('').optional(),
+    planned_for: Joi.date().optional(),
+    executed_at: Joi.date().optional(),
+    execution_status: Joi.string().valid('PLANNED', 'IN_PROGRESS', 'COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED').optional(),
+    outcome_notes: Joi.string().max(5000).allow('').optional()
   }).min(1),
 
   // Queue schemas

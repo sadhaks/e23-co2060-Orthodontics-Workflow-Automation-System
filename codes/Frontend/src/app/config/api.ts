@@ -10,6 +10,7 @@ export const API_ENDPOINTS = {
   // Authentication
   AUTH: {
     LOGIN: '/api/auth/login',
+    GOOGLE: '/api/auth/google',
     REFRESH: '/api/auth/refresh',
     LOGOUT: '/api/auth/logout',
     PROFILE: '/api/auth/profile',
@@ -23,6 +24,7 @@ export const API_ENDPOINTS = {
     CREATE: '/api/users',
     UPDATE: (id: string) => `/api/users/${id}`,
     DELETE: (id: string) => `/api/users/${id}`,
+    RESET_PASSWORD: (id: string) => `/api/users/${id}/reset-password`,
     STATS: '/api/users/stats',
     STAFF: '/api/users/staff'
   },
@@ -45,6 +47,12 @@ export const API_ENDPOINTS = {
     HISTORY: (id: string) => `/api/patients/${id}/history`,
     DENTAL_CHART: (id: string) => `/api/patients/${id}/dental-chart`,
     DENTAL_CHART_TOOTH: (id: string, toothNumber: number) => `/api/patients/${id}/dental-chart/${toothNumber}`,
+    DENTAL_CHART_CUSTOM: (id: string) => `/api/patients/${id}/dental-chart/custom`,
+    DENTAL_CHART_CUSTOM_TOOTH: (id: string, toothCode: string) => `/api/patients/${id}/dental-chart/custom/${encodeURIComponent(toothCode)}`,
+    DENTAL_CHART_VERSIONS: (id: string) => `/api/patients/${id}/dental-chart/versions`,
+    DENTAL_CHART_VERSION_DOWNLOAD: (id: string, versionId: string) => `/api/patients/${id}/dental-chart/versions/${versionId}/download`,
+    DENTAL_CHART_VERSION_DELETE: (id: string, versionId: string) => `/api/patients/${id}/dental-chart/versions/${versionId}`,
+    DENTAL_CHART_VERSION_RESTORE: (id: string, versionId: string) => `/api/patients/${id}/dental-chart/versions/${versionId}/restore`,
   },
   
   // Visits
@@ -111,6 +119,7 @@ export const API_ENDPOINTS = {
     CREATE: '/api/inventory',
     UPDATE: (id: string) => `/api/inventory/${id}`,
     DELETE: (id: string) => `/api/inventory/${id}`,
+    RESTORE: (id: string) => `/api/inventory/${id}/restore`,
     STATS: '/api/inventory/stats',
     UPDATE_STOCK: (id: string) => `/api/inventory/${id}/stock`,
   },

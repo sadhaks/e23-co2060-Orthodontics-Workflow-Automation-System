@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Badge, Button, Table, Input } from '../components/UI';
-import { Plus, Search, RefreshCcw } from 'lucide-react';
+import { Plus, Search, RefreshCcw, Trash2, RotateCcw } from 'lucide-react';
 import { apiService } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 type InventoryItem = {
   id: number;
@@ -11,6 +12,7 @@ type InventoryItem = {
   unit: string;
   minimum_threshold: number;
   alert_level: 'NORMAL' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+  deleted_at?: string | null;
 };
 
 const initialNewItem = {
@@ -22,6 +24,7 @@ const initialNewItem = {
 };
 
 export function InventoryPage() {
+  const { user } = useAuth();
   const [rows, setRows] = useState<InventoryItem[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [search, setSearch] = useState('');
@@ -32,6 +35,9 @@ export function InventoryPage() {
   const [creating, setCreating] = useState(false);
   const [newItem, setNewItem] = useState(initialNewItem);
   const [stockUpdatingId, setStockUpdatingId] = useState<number | null>(null);
+  const [processingId, setProcessingId] = useState<number | null>(null);
+  const [deletedMode, setDeletedMode] = useState<'active' | 'trashed'>('active');
+  const canMutateInventory = user?.role === 'NURSE';
 
   const loadInventory = async () => {
     setLoading(true);
@@ -48,6 +54,7 @@ export function InventoryPage() {
           limit: pageSize,
           category: category || undefined,
           search: search.trim() || undefined,
+          deleted: deletedMode,
         });
 
         allItems.push(...(pageRes.data?.inventory || []));
@@ -64,13 +71,21 @@ export function InventoryPage() {
     }
 
     try {
-      const statsRes = await apiService.inventory.getStats();
-      setStats(statsRes.data?.overview || null);
-      if (!statsRes.data?.overview) {
+      if (deletedMode === 'active') {
+        const statsRes = await apiService.inventory.getStats();
+        setStats(statsRes.data?.overview || null);
+        if (!statsRes.data?.overview) {
+          setStats({
+            total_items: allItems.length,
+            low_stock: allItems.filter((item) => item.alert_level === 'LOW_STOCK').length,
+            out_of_stock: allItems.filter((item) => item.alert_level === 'OUT_OF_STOCK').length,
+          });
+        }
+      } else {
         setStats({
           total_items: allItems.length,
-          low_stock: allItems.filter((item) => item.alert_level === 'LOW_STOCK').length,
-          out_of_stock: allItems.filter((item) => item.alert_level === 'OUT_OF_STOCK').length,
+          low_stock: 0,
+          out_of_stock: 0,
         });
       }
     } catch {
@@ -86,7 +101,7 @@ export function InventoryPage() {
 
   useEffect(() => {
     loadInventory();
-  }, [category, search]);
+  }, [category, search, deletedMode]);
 
   const filteredRows = useMemo(() => rows, [rows]);
 
@@ -103,6 +118,7 @@ export function InventoryPage() {
 
   const createItem = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canMutateInventory) return;
     setCreating(true);
     setError(null);
     try {
@@ -124,6 +140,7 @@ export function InventoryPage() {
   };
 
   const restock = async (id: number) => {
+    if (!canMutateInventory) return;
     const qtyText = window.prompt('Enter restock quantity');
     const qty = Number(qtyText);
     if (!qtyText || !Number.isFinite(qty) || qty <= 0) return;
@@ -145,6 +162,50 @@ export function InventoryPage() {
     }
   };
 
+  const moveToBin = async (id: number) => {
+    if (!canMutateInventory) return;
+    if (!window.confirm('Move this item to recycle bin?')) return;
+    setProcessingId(id);
+    setError(null);
+    try {
+      await apiService.inventory.delete(String(id));
+      await loadInventory();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to move item to bin');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const restoreItem = async (id: number) => {
+    if (!canMutateInventory) return;
+    setProcessingId(id);
+    setError(null);
+    try {
+      await apiService.inventory.restore(String(id));
+      await loadInventory();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to restore item');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const permanentlyDeleteItem = async (id: number) => {
+    if (!canMutateInventory) return;
+    if (!window.confirm('Permanently delete this item from recycle bin? This cannot be undone.')) return;
+    setProcessingId(id);
+    setError(null);
+    try {
+      await apiService.inventory.delete(String(id), true);
+      await loadInventory();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to permanently delete item');
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -153,14 +214,38 @@ export function InventoryPage() {
           <p className="text-gray-500">Live inventory with stock updates and alerts.</p>
         </div>
         <div className="flex gap-2">
+          <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
+            <button
+              type="button"
+              className={`px-3 h-10 text-sm ${deletedMode === 'active' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'}`}
+              onClick={() => setDeletedMode('active')}
+            >
+              Active
+            </button>
+            <button
+              type="button"
+              className={`px-3 h-10 text-sm border-l border-gray-200 ${deletedMode === 'trashed' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'}`}
+              onClick={() => setDeletedMode('trashed')}
+            >
+              Recycle Bin
+            </button>
+          </div>
           <Button variant="secondary" className="flex items-center gap-2" onClick={loadInventory}>
             <RefreshCcw className="w-4 h-4" /> Refresh
           </Button>
-          <Button className="flex items-center gap-2" onClick={() => setShowCreate((v) => !v)}>
-            <Plus className="w-4 h-4" /> Add Material
-          </Button>
+          {canMutateInventory && deletedMode === 'active' && (
+            <Button className="flex items-center gap-2" onClick={() => setShowCreate((v) => !v)}>
+              <Plus className="w-4 h-4" /> Add Material
+            </Button>
+          )}
         </div>
       </div>
+
+      {!canMutateInventory && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
+          You have read-only access to Materials &amp; Inventory.
+        </div>
+      )}
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
@@ -179,7 +264,7 @@ export function InventoryPage() {
         </Card>
       </div>
 
-      {showCreate && (
+      {showCreate && canMutateInventory && deletedMode === 'active' && (
         <Card className="p-4">
           <form className="grid grid-cols-1 md:grid-cols-5 gap-3" onSubmit={createItem}>
             <Input placeholder="Name" value={newItem.name} onChange={(e) => setNewItem((s) => ({ ...s, name: e.target.value }))} required />
@@ -214,7 +299,7 @@ export function InventoryPage() {
               <th className="px-6 py-4 font-semibold text-gray-600">Category</th>
               <th className="px-6 py-4 font-semibold text-gray-600">Current Qty</th>
               <th className="px-6 py-4 font-semibold text-gray-600">Threshold</th>
-              <th className="px-6 py-4 font-semibold text-gray-600">Status</th>
+              {deletedMode === 'active' && <th className="px-6 py-4 font-semibold text-gray-600">Status</th>}
               <th className="px-6 py-4 font-semibold text-gray-600">Actions</th>
             </tr>
           </thead>
@@ -225,16 +310,54 @@ export function InventoryPage() {
                 <td className="px-6 py-4 text-gray-600">{item.category}</td>
                 <td className="px-6 py-4 text-gray-800 font-semibold">{item.quantity} {item.unit}</td>
                 <td className="px-6 py-4 text-gray-500">{item.minimum_threshold} {item.unit}</td>
-                <td className="px-6 py-4"><Badge variant={alertVariant(item.alert_level) as any}>{item.alert_level}</Badge></td>
+                {deletedMode === 'active' && (
+                  <td className="px-6 py-4"><Badge variant={alertVariant(item.alert_level) as any}>{item.alert_level}</Badge></td>
+                )}
                 <td className="px-6 py-4">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={stockUpdatingId === item.id}
-                    onClick={() => restock(item.id)}
-                  >
-                    Restock
-                  </Button>
+                  {canMutateInventory && deletedMode === 'active' ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={stockUpdatingId === item.id || processingId === item.id}
+                        onClick={() => restock(item.id)}
+                      >
+                        Restock
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        disabled={processingId === item.id || stockUpdatingId === item.id}
+                        onClick={() => moveToBin(item.id)}
+                      >
+                        <Trash2 className="w-3 h-3 mr-1" />
+                        Delete
+                      </Button>
+                    </div>
+                  ) : canMutateInventory && deletedMode === 'trashed' ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={processingId === item.id}
+                        onClick={() => restoreItem(item.id)}
+                        className="bg-green-600 text-white border border-green-600 hover:bg-green-700 active:bg-green-800"
+                      >
+                        <RotateCcw className="w-3 h-3 mr-1" />
+                        Restore
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        disabled={processingId === item.id}
+                        onClick={() => permanentlyDeleteItem(item.id)}
+                      >
+                        Delete Permanently
+                      </Button>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-gray-500">Read-only</span>
+                  )}
                 </td>
               </tr>
             ))}

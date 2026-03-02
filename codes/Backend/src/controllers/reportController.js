@@ -243,16 +243,16 @@ const getInventoryAlertsReport = async (req, res) => {
     let whereClause = '';
     switch (alert_type) {
       case 'out_of_stock':
-        whereClause = 'WHERE i.quantity = 0';
+        whereClause = 'WHERE i.deleted_at IS NULL AND i.purged_at IS NULL AND i.quantity = 0';
         break;
       case 'low_stock':
-        whereClause = 'WHERE i.quantity <= i.minimum_threshold AND i.quantity > 0';
+        whereClause = 'WHERE i.deleted_at IS NULL AND i.purged_at IS NULL AND i.quantity <= i.minimum_threshold AND i.quantity > 0';
         break;
       case 'critical':
-        whereClause = 'WHERE i.quantity <= i.minimum_threshold / 2';
+        whereClause = 'WHERE i.deleted_at IS NULL AND i.purged_at IS NULL AND i.quantity <= i.minimum_threshold / 2';
         break;
       default:
-        whereClause = 'WHERE i.quantity <= i.minimum_threshold';
+        whereClause = 'WHERE i.deleted_at IS NULL AND i.purged_at IS NULL AND i.quantity <= i.minimum_threshold';
     }
 
     const alertsQuery = `
@@ -289,6 +289,8 @@ const getInventoryAlertsReport = async (req, res) => {
         SUM(quantity) as total_quantity,
         SUM(CASE WHEN quantity <= minimum_threshold THEN quantity ELSE 0 END) as at_risk_quantity
       FROM inventory_items
+      WHERE deleted_at IS NULL
+        AND purged_at IS NULL
     `;
 
     const summary = await query(summaryQuery);
@@ -302,6 +304,8 @@ const getInventoryAlertsReport = async (req, res) => {
         COUNT(CASE WHEN quantity <= minimum_threshold THEN 1 END) as low_stock,
         SUM(quantity) as total_quantity
       FROM inventory_items
+      WHERE deleted_at IS NULL
+        AND purged_at IS NULL
       GROUP BY category
       ORDER BY low_stock DESC, total_items DESC
     `;
@@ -319,7 +323,7 @@ const getInventoryAlertsReport = async (req, res) => {
       LEFT JOIN inventory_items ii ON it.item_id = ii.id
       LEFT JOIN users u ON it.performed_by = u.id
       WHERE it.item_id IN (
-        SELECT id FROM inventory_items WHERE quantity <= minimum_threshold
+        SELECT id FROM inventory_items WHERE deleted_at IS NULL AND purged_at IS NULL AND quantity <= minimum_threshold
       )
       ORDER BY it.created_at DESC
       LIMIT 50
@@ -377,7 +381,7 @@ const getDashboardReport = async (req, res) => {
         (SELECT COUNT(*) FROM visits WHERE visit_date >= ${dateFilter} AND status = 'COMPLETED') as completed_visits,
         (SELECT COUNT(*) FROM cases WHERE created_at >= ${dateFilter}) as period_cases,
         (SELECT COUNT(*) FROM cases WHERE status = 'VERIFIED') as verified_cases,
-        (SELECT COUNT(*) FROM inventory_items WHERE quantity <= minimum_threshold) as inventory_alerts,
+        (SELECT COUNT(*) FROM inventory_items WHERE deleted_at IS NULL AND purged_at IS NULL AND quantity <= minimum_threshold) as inventory_alerts,
         (SELECT COUNT(*) FROM users WHERE status = 'ACTIVE') as active_users
     `;
 

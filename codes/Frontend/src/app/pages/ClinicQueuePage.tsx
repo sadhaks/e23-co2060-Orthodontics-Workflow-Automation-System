@@ -40,7 +40,7 @@ export function ClinicQueuePage() {
   const [updatingId, setUpdatingId] = useState<number | null>(null);
 
   const canAddToQueue = ['RECEPTION', 'NURSE'].includes(user?.role || '');
-  const canUpdateQueue = ['RECEPTION', 'NURSE', 'ORTHODONTIST', 'DENTAL_SURGEON'].includes(user?.role || '');
+  const canUpdateQueue = ['RECEPTION', 'NURSE', 'ORTHODONTIST', 'DENTAL_SURGEON', 'STUDENT'].includes(user?.role || '');
 
   const loadQueue = async () => {
     setLoading(true);

@@ -1,61 +1,61 @@
-**Add your own guidelines here**
-<!--
+# OrthoFlow Frontend Guidelines
 
-System Guidelines
+Use these guidelines when adding or modifying frontend features.
 
-Use this file to provide the AI with rules and guidelines you want it to follow.
-This template outlines a few examples of things you can add. You can add your own sections and format it to suit your needs
+## 1. Product Priorities
 
-TIP: More context isn't always better. It can confuse the LLM. Try and add the most important rules you need
+- Preserve clinical workflow clarity over visual complexity.
+- Keep role-based restrictions explicit in UI.
+- Prefer safe, reversible actions for destructive operations (bin -> restore -> permanent delete).
 
-# General guidelines
+## 2. Role-Aware UX Rules
 
-Any general rules you want the AI to follow.
-For example:
+- If a role can view but not edit a section, show the section and display:
+  - `You do not have access to this section.`
+- Do not hide critical navigation tabs if requirement says section should be visible but restricted.
+- Avoid exposing controls that will always fail by permission.
 
-* Only use absolute positioning when necessary. Opt for responsive and well structured layouts that use flexbox and grid by default
-* Refactor code as you go to keep code clean
-* Keep file sizes small and put helper functions and components in their own files.
+## 3. Interaction Feedback
 
---------------
+- Buttons that trigger network requests must provide immediate feedback:
+  - disabled state while running
+  - visual progress indicator (spinner or label change)
+  - success/error toast for completion
+- Apply this especially to:
+  - Refresh actions
+  - Download actions
+  - Save/submit actions
 
-# Design system guidelines
-Rules for how the AI should make generations look like your company's design system
+## 4. Dental Chart Rules
 
-Additionally, if you select a design system to use in the prompt box, you can reference
-your design system's components, tokens, variables and components.
-For example:
+- Keep notation format and color conventions consistent.
+- Keep custom-chart summary cards tied to selected customized chart entries.
+- Keep annotated version list chronological.
+- Keep orthodontist-only bin actions gated in UI.
 
-* Use a base font-size of 14px
-* Date formats should always be in the format “Jun 10”
-* The bottom toolbar should only ever have a maximum of 4 items
-* Never use the floating action button with the bottom toolbar
-* Chips should always come in sets of 3 or more
-* Don't use a dropdown if there are 2 or fewer options
+## 5. Documents Rules
 
-You can also create sub sections and add more specific details
-For example:
+- Support up to 10 files per upload batch.
+- Enforce 100MB max total per batch.
+- Keep upload progress visible.
+- Keep trash/restore/permanent delete behavior consistent with backend rules.
 
+## 6. Date/Time Rules
 
-## Button
-The Button component is a fundamental interactive element in our design system, designed to trigger actions or navigate
-users through the application. It provides visual feedback and clear affordances to enhance user experience.
+- Use explicit labels for date/time fields.
+- Prefer date/time pickers where available.
+- Avoid ambiguous placeholders when explicit labels exist.
 
-### Usage
-Buttons should be used for important actions that users need to take, such as form submissions, confirming choices,
-or initiating processes. They communicate interactivity and should have clear, action-oriented labels.
+## 7. API Integration Rules
 
-### Variants
-* Primary Button
-  * Purpose : Used for the main action in a section or page
-  * Visual Style : Bold, filled with the primary brand color
-  * Usage : One primary button per section to guide users toward the most important action
-* Secondary Button
-  * Purpose : Used for alternative or supporting actions
-  * Visual Style : Outlined with the primary color, transparent background
-  * Usage : Can appear alongside a primary button for less important actions
-* Tertiary Button
-  * Purpose : Used for the least important actions
-  * Visual Style : Text-only with no border, using primary color
-  * Usage : For actions that should be available but not emphasized
--->
+- Use centralized API service calls.
+- Do not hardcode endpoint URLs in components.
+- Keep GET requests fresh when used for manual refresh actions.
+
+## 8. Quality Gates
+
+Before finalizing frontend changes:
+
+1. Run `npm run build` in `Frontend`.
+2. Verify no obvious runtime errors in browser console.
+3. Validate affected role behaviors manually or via existing test scripts.

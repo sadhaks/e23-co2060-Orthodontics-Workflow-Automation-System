@@ -33,27 +33,33 @@ router.get('/:id',
 
 // POST /api/inventory - Create new inventory item
 router.post('/', 
-  authorizeRoles('ADMIN', 'NURSE'),
+  authorizeRoles('NURSE'),
   validate(schemas.createInventoryItem),
   asyncHandler(inventoryController.createInventoryItem)
 );
 
 // PUT /api/inventory/:id - Update inventory item
 router.put('/:id', 
-  authorizeRoles('ADMIN', 'NURSE'),
+  authorizeRoles('NURSE'),
   validate(schemas.updateInventoryItem),
   asyncHandler(inventoryController.updateInventoryItem)
 );
 
-// DELETE /api/inventory/:id - Delete inventory item (Admin only)
+// DELETE /api/inventory/:id - Delete inventory item
 router.delete('/:id', 
-  authorizeRoles('ADMIN'),
+  authorizeRoles('NURSE'),
   asyncHandler(inventoryController.deleteInventoryItem)
+);
+
+// PUT /api/inventory/:id/restore - Restore inventory item from bin
+router.put('/:id/restore',
+  authorizeRoles('NURSE'),
+  asyncHandler(inventoryController.restoreInventoryItem)
 );
 
 // PUT /api/inventory/:id/stock - Update stock quantity
 router.put('/:id/stock', 
-  authorizeRoles('ADMIN', 'NURSE'),
+  authorizeRoles('NURSE'),
   asyncHandler(inventoryController.updateStock)
 );
 

@@ -21,9 +21,18 @@ import {
   Select,
   Chip,
   Alert,
-  Snackbar
+  Snackbar,
+  CircularProgress,
+  LinearProgress
 } from '@mui/material';
-import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import {
+  Add as AddIcon,
+  Edit as EditIcon,
+  Delete as DeleteIcon,
+  CheckCircle as CheckCircleIcon,
+  DeleteForever as DeleteForeverIcon,
+  VpnKey as VpnKeyIcon
+} from '@mui/icons-material';
 import { apiService } from '../../services/api';
 import { CreateUserForm } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -49,7 +58,6 @@ const UserManagement: React.FC = () => {
   }
 
   const [users, setUsers] = useState<User[]>([]);
-  const [totalUsers, setTotalUsers] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -58,11 +66,12 @@ const UserManagement: React.FC = () => {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [createProgressStep, setCreateProgressStep] = useState(0);
 
   const [formData, setFormData] = useState<CreateUserForm>({
     name: '',
     email: '',
-    password: '',
     role: '',
     department: 'Orthodontics' // Fixed to Orthodontics department
   });
@@ -79,6 +88,19 @@ const UserManagement: React.FC = () => {
   useEffect(() => {
     loadUsers();
   }, []);
+
+  useEffect(() => {
+    if (!creatingUser) {
+      setCreateProgressStep(0);
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setCreateProgressStep((prev) => (prev + 1) % 4);
+    }, 700);
+
+    return () => window.clearInterval(timer);
+  }, [creatingUser]);
 
   const loadUsers = async (filters?: { search?: string; role?: string }) => {
     try {
@@ -122,7 +144,6 @@ const UserManagement: React.FC = () => {
       );
 
       setUsers(dedupedUsers);
-      setTotalUsers(dedupedUsers.length);
     } catch (err: any) {
       setError(err.message || 'Failed to load users');
     } finally {
@@ -141,19 +162,24 @@ const UserManagement: React.FC = () => {
   };
 
   const handleCreateUser = async () => {
+    if (creatingUser) return;
+
     try {
+      setCreatingUser(true);
       const response = await apiService.users.create(formData);
       
       if (response.success) {
-        setSnackbar({ open: true, message: 'User created successfully', severity: 'success' });
+        setSnackbar({ open: true, message: response.message || 'User successfully created', severity: 'success' });
         setCreateDialogOpen(false);
-        setFormData({ name: '', email: '', password: '', role: '', department: 'Orthodontics' });
+        setFormData({ name: '', email: '', role: '', department: 'Orthodontics' });
         loadUsers();
       } else {
         setSnackbar({ open: true, message: response.message || 'Failed to create user', severity: 'error' });
       }
     } catch (err: any) {
       setSnackbar({ open: true, message: err.response?.data?.message || err.message || 'Failed to create user', severity: 'error' });
+    } finally {
+      setCreatingUser(false);
     }
   };
 
@@ -161,22 +187,19 @@ const UserManagement: React.FC = () => {
     if (!selectedUser) return;
 
     try {
-      const updateData: { name: string; email: string; role: string; department: string; password?: string } = {
+      const updateData: { name: string; email: string; role: string; department: string } = {
         name: formData.name,
         email: formData.email,
         role: formData.role,
         department: formData.department
       };
-      if (formData.password?.trim()) {
-        updateData.password = formData.password.trim();
-      }
 
       const response = await apiService.users.update(selectedUser.id, updateData);
       if (response.success) {
         setSnackbar({ open: true, message: 'User updated successfully', severity: 'success' });
         setEditDialogOpen(false);
         setSelectedUser(null);
-        setFormData({ name: '', email: '', password: '', role: '', department: 'Orthodontics' });
+        setFormData({ name: '', email: '', role: '', department: 'Orthodontics' });
         loadUsers();
       } else {
         setSnackbar({ open: true, message: response.message || 'Failed to update user', severity: 'error' });
@@ -216,6 +239,27 @@ const UserManagement: React.FC = () => {
     }
   };
 
+  const handleResetPassword = async (targetUser: User) => {
+    if (!window.confirm(`Generate and email a temporary password to ${targetUser.email}?`)) return;
+
+    try {
+      const response = await apiService.users.resetPassword(targetUser.id);
+      if (response.success) {
+        const successMessage = response.message || 'Password reset successful. Temporary password sent to user email.';
+        setSnackbar({
+          open: true,
+          message: successMessage,
+          severity: 'success'
+        });
+        window.alert(successMessage);
+      } else {
+        setSnackbar({ open: true, message: response.message || 'Failed to reset password', severity: 'error' });
+      }
+    } catch (err: any) {
+      setSnackbar({ open: true, message: err.response?.data?.message || err.message || 'Failed to reset password', severity: 'error' });
+    }
+  };
+
   const handlePermanentDeleteUser = async (targetUser: User) => {
     if (targetUser.status !== 'INACTIVE') {
       setSnackbar({ open: true, message: 'Deactivate the user first before permanent delete', severity: 'error' });
@@ -242,7 +286,6 @@ const UserManagement: React.FC = () => {
     setFormData({
       name: user.name,
       email: user.email,
-      password: '',
       role: user.role,
       department: user.department || ''
     });
@@ -265,13 +308,52 @@ const UserManagement: React.FC = () => {
     return status === 'ACTIVE' ? '#4caf50' : '#f44336';
   };
 
+  const formatDateDDMMYYYY = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '-';
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+  };
+
+  const actionTileSx = {
+    borderRadius: '12px',
+    textTransform: 'none',
+    fontWeight: 600,
+    minWidth: '120px',
+    height: '34px',
+    px: 1.5,
+    boxShadow: 'none',
+    '&:hover': { boxShadow: 'none' }
+  };
+
+  const snackbarNode = (
+    <Snackbar
+      open={snackbar.open}
+      autoHideDuration={6000}
+      onClose={() => setSnackbar({ ...snackbar, open: false })}
+    >
+      <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
+        {snackbar.message}
+      </Alert>
+    </Snackbar>
+  );
+
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-        <Typography>Loading users...</Typography>
-      </Box>
+      <>
+        <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+          <Typography>Loading users...</Typography>
+        </Box>
+        {snackbarNode}
+      </>
     );
   }
+
+  const totalUsers = users.length;
+  const activeUsers = users.filter((u) => u.status === 'ACTIVE').length;
+  const inactiveUsers = users.filter((u) => u.status === 'INACTIVE').length;
 
   return (
     <Box p={3}>
@@ -286,9 +368,17 @@ const UserManagement: React.FC = () => {
       )}
 
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-        <Typography variant="body2" color="textSecondary">
-          Total Users: {totalUsers}
-        </Typography>
+        <Box display="flex" gap={2} alignItems="center" flexWrap="wrap">
+          <Typography variant="body2" color="textSecondary">
+            Total Users: {totalUsers}
+          </Typography>
+          <Typography variant="body2" color="success.main">
+            Active Users: {activeUsers}
+          </Typography>
+          <Typography variant="body2" color="error.main">
+            Inactive Users: {inactiveUsers}
+          </Typography>
+        </Box>
         <Button
           variant="contained"
           startIcon={<AddIcon />}
@@ -376,31 +466,69 @@ const UserManagement: React.FC = () => {
                     />
                   </TableCell>
                   <TableCell>
-                    {new Date(user.created_at).toLocaleDateString()}
+                    {formatDateDDMMYYYY(user.created_at)}
                   </TableCell>
                   <TableCell>
-                    <Button
-                      size="small"
-                      startIcon={<EditIcon />}
-                      onClick={() => openEditDialog(user)}
-                      sx={{ mr: 1 }}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      size="small"
-                      startIcon={<DeleteIcon />}
-                      onClick={() => handleDeleteUser(user.id)}
-                      color="error"
-                    >
-                      Delete
-                    </Button>
+                    <Box display="flex" gap={1} flexWrap="wrap">
+                    {user.status !== 'INACTIVE' && (
+                      <Button
+                        size="small"
+                        variant="contained"
+                        startIcon={<EditIcon />}
+                        onClick={() => openEditDialog(user)}
+                        sx={{
+                          ...actionTileSx,
+                          backgroundColor: '#1d4ed8',
+                          '&:hover': { backgroundColor: '#1e40af' }
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                    {user.status !== 'INACTIVE' && (
+                      <Button
+                        size="small"
+                        variant="contained"
+                        startIcon={<VpnKeyIcon />}
+                        onClick={() => handleResetPassword(user)}
+                        sx={{
+                          ...actionTileSx,
+                          minWidth: '190px',
+                          height: '38px',
+                          px: 2.5,
+                          backgroundColor: '#6d28d9',
+                          '&:hover': { backgroundColor: '#5b21b6' }
+                        }}
+                      >
+                        Reset Password
+                      </Button>
+                    )}
+                    {user.status !== 'INACTIVE' && (
+                      <Button
+                        size="small"
+                        variant="contained"
+                        startIcon={<DeleteIcon />}
+                        onClick={() => handleDeleteUser(user.id)}
+                        sx={{
+                          ...actionTileSx,
+                          backgroundColor: '#dc2626',
+                          '&:hover': { backgroundColor: '#b91c1c' }
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    )}
                     {user.status === 'INACTIVE' && (
                       <Button
                         size="small"
+                        variant="contained"
+                        startIcon={<CheckCircleIcon />}
                         onClick={() => handleActivateUser(user)}
-                        color="success"
-                        sx={{ ml: 1 }}
+                        sx={{
+                          ...actionTileSx,
+                          backgroundColor: '#16a34a',
+                          '&:hover': { backgroundColor: '#15803d' }
+                        }}
                       >
                         Activate
                       </Button>
@@ -408,13 +536,20 @@ const UserManagement: React.FC = () => {
                     {user.status === 'INACTIVE' && (
                       <Button
                         size="small"
+                        variant="contained"
+                        startIcon={<DeleteForeverIcon />}
                         onClick={() => handlePermanentDeleteUser(user)}
-                        color="error"
-                        sx={{ ml: 1 }}
+                        sx={{
+                          ...actionTileSx,
+                          minWidth: '185px',
+                          backgroundColor: '#b91c1c',
+                          '&:hover': { backgroundColor: '#991b1b' }
+                        }}
                       >
                         Delete Permanently
                       </Button>
                     )}
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))}
@@ -424,7 +559,7 @@ const UserManagement: React.FC = () => {
       </Paper>
 
       {/* Create User Dialog */}
-      <Dialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={createDialogOpen} onClose={() => !creatingUser && setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Create New User</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
@@ -443,15 +578,17 @@ const UserManagement: React.FC = () => {
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
               required
             />
-            <TextField
-              label="Password"
-              type="password"
-              fullWidth
-              value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              required
-              helperText="Minimum 8 characters with uppercase, lowercase, and numbers"
-            />
+            <Alert severity="info">
+              A secure temporary password will be generated automatically and sent to this user by email.
+            </Alert>
+            {creatingUser && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Alert severity="warning">
+                  Creating user and sending temporary password{'.'.repeat(createProgressStep + 1)}
+                </Alert>
+                <LinearProgress />
+              </Box>
+            )}
             <FormControl fullWidth>
               <InputLabel>Role</InputLabel>
               <Select
@@ -470,9 +607,16 @@ const UserManagement: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
-          <Button onClick={handleCreateUser} variant="contained" disabled={!formData.name || !formData.email || !formData.password || !formData.role}>
-            Create User
+          <Button onClick={() => setCreateDialogOpen(false)} disabled={creatingUser}>Cancel</Button>
+          <Button onClick={handleCreateUser} variant="contained" disabled={creatingUser || !formData.name || !formData.email || !formData.role}>
+            {creatingUser ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CircularProgress size={16} color="inherit" />
+                Creating...
+              </Box>
+            ) : (
+              'Create User'
+            )}
           </Button>
         </DialogActions>
       </Dialog>
@@ -497,14 +641,9 @@ const UserManagement: React.FC = () => {
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
               required
             />
-            <TextField
-              label="Password (leave empty to keep current)"
-              type="password"
-              fullWidth
-              value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              helperText="Minimum 8 characters with uppercase, lowercase, and numbers"
-            />
+            <Alert severity="info">
+              To reset this user&apos;s password, close this dialog and use the <strong>Reset Password</strong> action.
+            </Alert>
             <FormControl fullWidth>
               <InputLabel>Role</InputLabel>
               <Select
@@ -531,15 +670,7 @@ const UserManagement: React.FC = () => {
       </Dialog>
 
       {/* Snackbar for notifications */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-      >
-        <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
+      {snackbarNode}
     </Box>
   );
 };

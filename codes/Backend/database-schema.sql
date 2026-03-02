@@ -17,6 +17,9 @@ CREATE TABLE users (
     role ENUM('ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'STUDENT', 'RECEPTION') NOT NULL,
     department VARCHAR(100),
     status ENUM('ACTIVE', 'INACTIVE') DEFAULT 'ACTIVE',
+    must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+    password_changed_at TIMESTAMP NULL DEFAULT NULL,
+    last_login TIMESTAMP NULL DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP NULL,
@@ -111,7 +114,14 @@ CREATE TABLE clinical_notes (
     patient_id INT NOT NULL,
     author_id INT NOT NULL,
     content TEXT NOT NULL,
-    note_type ENUM('TREATMENT', 'OBSERVATION', 'PROGRESS', 'SUPERVISOR_REVIEW') DEFAULT 'TREATMENT',
+    note_type ENUM('TREATMENT', 'OBSERVATION', 'PROGRESS', 'SUPERVISOR_REVIEW', 'DIAGNOSIS') DEFAULT 'TREATMENT',
+    plan_procedure VARCHAR(255) NULL,
+    planned_for DATETIME NULL,
+    executed_at DATETIME NULL,
+    execution_status ENUM('PLANNED', 'IN_PROGRESS', 'COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED') NULL,
+    outcome_notes TEXT NULL,
+    deleted_at TIMESTAMP NULL,
+    deleted_by INT NULL,
     is_verified BOOLEAN DEFAULT FALSE,
     verified_by INT NULL,
     verified_at TIMESTAMP NULL,
@@ -119,11 +129,13 @@ CREATE TABLE clinical_notes (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
     FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (verified_by) REFERENCES users(id) ON DELETE SET NULL,
     INDEX idx_patient_id (patient_id),
     INDEX idx_author_id (author_id),
     INDEX idx_verified (is_verified),
-    INDEX idx_created_at (created_at)
+    INDEX idx_created_at (created_at),
+    INDEX idx_deleted_at (deleted_at)
 );
 
 -- Queue Table - Live Clinic Queue Management
@@ -183,11 +195,17 @@ CREATE TABLE inventory_items (
     location VARCHAR(100),
     supplier VARCHAR(255),
     cost_per_unit DECIMAL(10,2),
+    deleted_at TIMESTAMP NULL DEFAULT NULL,
+    deleted_by INT NULL DEFAULT NULL,
+    purged_at TIMESTAMP NULL DEFAULT NULL,
+    purged_by INT NULL DEFAULT NULL,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_category (category),
     INDEX idx_quantity (quantity),
-    INDEX idx_threshold (minimum_threshold)
+    INDEX idx_threshold (minimum_threshold),
+    INDEX idx_deleted_at (deleted_at),
+    INDEX idx_purged_at (purged_at)
 );
 
 -- Inventory Transactions Table - Stock Movement Tracking

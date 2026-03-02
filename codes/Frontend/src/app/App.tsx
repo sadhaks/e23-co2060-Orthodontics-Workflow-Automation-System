@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider, Outlet, Navigate } from "react-router";
+import { createBrowserRouter, RouterProvider, Outlet, Navigate, useLocation } from "react-router";
 import { AuthProvider, useAuth } from './context/AuthContext';
 
 // Layout & Components
@@ -17,6 +17,7 @@ import { AuditLogsPage } from './pages/AuditLogsPage';
 
 function MainLayout() {
   const { user, isLoading } = useAuth();
+  const location = useLocation();
 
   if (isLoading) {
     return (
@@ -28,6 +29,10 @@ function MainLayout() {
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (user.must_change_password && location.pathname !== '/settings') {
+    return <Navigate to="/settings" replace />;
   }
 
   return (
@@ -89,7 +94,7 @@ const router = createBrowserRouter([
       {
         path: "queue",
         element: (
-          <RequireRoles roles={['ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'RECEPTION']}>
+          <RequireRoles roles={['ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'STUDENT', 'NURSE', 'RECEPTION']}>
             <ClinicQueuePage />
           </RequireRoles>
         ),
@@ -113,7 +118,7 @@ const router = createBrowserRouter([
       {
         path: "materials",
         element: (
-          <RequireRoles roles={['ADMIN']}>
+          <RequireRoles roles={['ADMIN', 'NURSE']}>
             <InventoryPage />
           </RequireRoles>
         ),

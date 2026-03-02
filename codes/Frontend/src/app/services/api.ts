@@ -32,6 +32,7 @@ export interface LoginResponse {
     email: string;
     role: string;
     department: string;
+    must_change_password?: boolean;
   };
   tokens: {
     accessToken: string;
@@ -46,12 +47,13 @@ export interface User {
   email: string;
   role: string;
   department: string;
+  must_change_password?: boolean;
 }
 
 export interface CreateUserForm {
   name: string;
   email: string;
-  password: string;
+  password?: string;
   role: string;
   department: string;
 }
@@ -101,6 +103,11 @@ class ApiClient {
       },
       ...options,
     };
+
+    // Always fetch fresh API state for GET requests (important for explicit Refresh actions)
+    if ((config.method || 'GET').toUpperCase() === 'GET') {
+      config.cache = 'no-store';
+    }
 
     // Add auth header if token exists
     if (this.accessToken) {
@@ -303,6 +310,14 @@ export const apiService = {
       }
       return response;
     },
+
+    loginWithGoogle: async (idToken: string) => {
+      const response = await apiClient.post<LoginResponse>(API_ENDPOINTS.AUTH.GOOGLE, { idToken });
+      if (response.success && response.data?.tokens) {
+        apiClient.setTokens(response.data.tokens.accessToken, response.data.tokens.refreshToken);
+      }
+      return response;
+    },
     
     logout: async () => {
       const refreshToken = apiClient.getRefreshToken();
@@ -348,6 +363,9 @@ export const apiService = {
 
     update: (id: string, userData: Partial<{ name: string; email: string; role: string; department: string; status: string; password: string }>) =>
       apiClient.put<any>(API_ENDPOINTS.USERS.UPDATE(id), userData),
+
+    resetPassword: (id: string) =>
+      apiClient.post<any>(API_ENDPOINTS.USERS.RESET_PASSWORD(id)),
 
     delete: (id: string, permanent = false) =>
       apiClient.delete<any>(`${API_ENDPOINTS.USERS.DELETE(id)}${permanent ? '?permanent=true' : ''}`),
@@ -427,6 +445,12 @@ export const apiService = {
     assign: (id: string, data: { user_id: number; assignment_role: 'ORTHODONTIST' | 'DENTAL_SURGEON' | 'NURSE' | 'STUDENT' }) =>
       apiClient.post(API_ENDPOINTS.PATIENTS.ASSIGNMENTS(id), data),
 
+    bulkAssign: (
+      id: string,
+      assignments: Array<{ user_id: number; assignment_role: 'ORTHODONTIST' | 'DENTAL_SURGEON' | 'NURSE' | 'STUDENT' }>
+    ) =>
+      apiClient.post(API_ENDPOINTS.PATIENTS.ASSIGNMENTS(id), { assignments }),
+
     getHistory: (id: string) =>
       apiClient.get<any>(API_ENDPOINTS.PATIENTS.HISTORY(id)),
 
@@ -454,6 +478,61 @@ export const apiService = {
 
     deleteDentalChartTooth: (id: string, toothNumber: number) =>
       apiClient.delete(API_ENDPOINTS.PATIENTS.DENTAL_CHART_TOOTH(id, toothNumber)),
+
+    getCustomDentalChart: (id: string) =>
+      apiClient.get<any[]>(API_ENDPOINTS.PATIENTS.DENTAL_CHART_CUSTOM(id)),
+
+    upsertCustomDentalChartTooth: (
+      id: string,
+      toothCode: string,
+      data: {
+        dentition: 'ADULT' | 'MILK';
+        notation_x: string;
+        notation_y: string;
+        status?: string;
+        is_pathology?: boolean;
+        is_planned?: boolean;
+        is_treated?: boolean;
+        is_missing?: boolean;
+        pathology?: string;
+        treatment?: string;
+        event_date?: string;
+      }
+    ) =>
+      apiClient.put(API_ENDPOINTS.PATIENTS.DENTAL_CHART_CUSTOM_TOOTH(id, toothCode), data),
+
+    deleteCustomDentalChartTooth: (id: string, toothCode: string) =>
+      apiClient.delete(API_ENDPOINTS.PATIENTS.DENTAL_CHART_CUSTOM_TOOTH(id, toothCode)),
+
+    getDentalChartVersions: (id: string, params?: { page?: number; limit?: number; deleted?: 'active' | 'trashed' | 'all' }) => {
+      const query = new URLSearchParams();
+      if (params?.page) query.append('page', String(params.page));
+      if (params?.limit) query.append('limit', String(params.limit));
+      if (params?.deleted) query.append('deleted', params.deleted);
+      const queryString = query.toString();
+      return apiClient.get<any>(`${API_ENDPOINTS.PATIENTS.DENTAL_CHART_VERSIONS(id)}${queryString ? `?${queryString}` : ''}`);
+    },
+
+    createDentalChartVersion: (id: string, data?: { version_label?: string }) =>
+      apiClient.post<any>(API_ENDPOINTS.PATIENTS.DENTAL_CHART_VERSIONS(id), data || {}),
+
+    downloadDentalChartVersion: async (id: string, versionId: string) => {
+      const { blob, filename } = await apiClient.downloadFile(API_ENDPOINTS.PATIENTS.DENTAL_CHART_VERSION_DOWNLOAD(id, versionId));
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename || `dental-chart-version-${versionId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    },
+
+    deleteDentalChartVersion: (id: string, versionId: string, permanent = false) =>
+      apiClient.delete<any>(`${API_ENDPOINTS.PATIENTS.DENTAL_CHART_VERSION_DELETE(id, versionId)}${permanent ? '?permanent=true' : ''}`),
+
+    restoreDentalChartVersion: (id: string, versionId: string) =>
+      apiClient.put<any>(API_ENDPOINTS.PATIENTS.DENTAL_CHART_VERSION_RESTORE(id, versionId)),
   },
 
   // Visits
@@ -524,20 +603,38 @@ export const apiService = {
 
   // Clinical Notes
   clinicalNotes: {
-    getPatientNotes: (patientId: string, params?: { page?: number; limit?: number }) => {
+    getPatientNotes: (patientId: string, params?: { page?: number; limit?: number; deleted?: 'active' | 'trashed' | 'all' }) => {
       const query = new URLSearchParams();
       if (params?.page) query.append('page', params.page.toString());
       if (params?.limit) query.append('limit', params.limit.toString());
+      if (params?.deleted) query.append('deleted', params.deleted);
       
       const queryString = query.toString();
       return apiClient.get<PaginatedResponse<any>>(`${API_ENDPOINTS.PATIENTS.CLINICAL_NOTES(patientId)}${queryString ? `?${queryString}` : ''}`);
     },
     
-    create: (patientId: string, data: { content: string; note_type?: string }) =>
+    create: (
+      patientId: string,
+      data: {
+        content: string;
+        note_type?: string;
+        plan_procedure?: string;
+        planned_for?: string;
+        executed_at?: string;
+        execution_status?: string;
+        outcome_notes?: string;
+      }
+    ) =>
       apiClient.post(API_ENDPOINTS.PATIENTS.CLINICAL_NOTES(patientId), data),
     
     verify: (id: string, data: { verification_notes?: string }) =>
       apiClient.post(API_ENDPOINTS.CLINICAL_NOTES.VERIFY(id), data),
+
+    delete: (id: string, permanent = false) =>
+      apiClient.delete(`${API_ENDPOINTS.CLINICAL_NOTES.DELETE(id)}${permanent ? '?permanent=true' : ''}`),
+
+    restore: (id: string) =>
+      apiClient.put(`/api/clinical-notes/${id}/restore`),
   },
 
   // Queue
@@ -585,12 +682,13 @@ export const apiService = {
 
   // Inventory
   inventory: {
-    getList: (params?: { page?: number; limit?: number; category?: string; search?: string }) => {
+    getList: (params?: { page?: number; limit?: number; category?: string; search?: string; deleted?: 'active' | 'trashed' | 'all' }) => {
       const query = new URLSearchParams();
       if (params?.page) query.append('page', params.page.toString());
       if (params?.limit) query.append('limit', params.limit.toString());
       if (params?.category) query.append('category', params.category);
       if (params?.search) query.append('search', params.search);
+      if (params?.deleted) query.append('deleted', params.deleted);
       
       const queryString = query.toString();
       return apiClient.get<PaginatedResponse<any>>(`${API_ENDPOINTS.INVENTORY.LIST}${queryString ? `?${queryString}` : ''}`);
@@ -598,6 +696,15 @@ export const apiService = {
 
     create: (data: { name: string; category: string; quantity: number; minimum_threshold: number; unit: string }) =>
       apiClient.post(API_ENDPOINTS.INVENTORY.CREATE, data),
+
+    update: (id: string, data: Partial<{ name: string; category: string; quantity: number; minimum_threshold: number; unit: string }>) =>
+      apiClient.put(API_ENDPOINTS.INVENTORY.UPDATE(id), data),
+
+    delete: (id: string, permanent = false) =>
+      apiClient.delete(`${API_ENDPOINTS.INVENTORY.DELETE(id)}${permanent ? '?permanent=true' : ''}`),
+
+    restore: (id: string) =>
+      apiClient.put(API_ENDPOINTS.INVENTORY.RESTORE(id)),
     
     updateStock: (id: string, data: { transaction_type: string; quantity: number; reference_type: string; notes?: string }) =>
       apiClient.put(API_ENDPOINTS.INVENTORY.UPDATE_STOCK(id), data),

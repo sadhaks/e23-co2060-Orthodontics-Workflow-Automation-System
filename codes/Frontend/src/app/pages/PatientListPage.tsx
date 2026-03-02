@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Table, Button, Input, Badge } from '../components/UI';
-import { Search, Filter, UserPlus, Pencil, Trash2 } from 'lucide-react';
+import { Search, Filter, UserPlus, Pencil, Trash2, ChevronDown, RefreshCcw } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { apiService } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -38,6 +38,12 @@ type DirectoryFilters = {
   registrationDate: string;
 };
 
+type MultiSelectOption = {
+  id: number | string;
+  name: string;
+  email?: string;
+};
+
 const initialForm = {
   first_name: '',
   last_name: '',
@@ -65,6 +71,143 @@ const calculateAgeFromDob = (dobValue: string) => {
   return String(age);
 };
 
+const toDateTimeLocalValue = (value?: string | null) => {
+  if (!value) return '';
+  const raw = String(value).trim();
+  const direct = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/);
+  if (direct) {
+    const [, datePart, hh, mm] = direct;
+    return `${datePart}T${hh}:${mm}`;
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  const hour = String(parsed.getHours()).padStart(2, '0');
+  const minute = String(parsed.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+};
+
+const getCurrentDateTimeLocal = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hour = String(now.getHours()).padStart(2, '0');
+  const minute = String(now.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+};
+
+function MultiSelectDropdown({
+  label,
+  options,
+  selectedIds,
+  onChange,
+  placeholder,
+  testIdPrefix
+}: {
+  label: string;
+  options: MultiSelectOption[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+  placeholder: string;
+  testIdPrefix: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onClickOutside = (event: MouseEvent) => {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, []);
+
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const filteredOptions = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return options;
+    return options.filter((option) =>
+      `${option.name} ${option.email || ''}`.toLowerCase().includes(normalized)
+    );
+  }, [options, query]);
+
+  const selectedLabels = useMemo(() => (
+    options
+      .filter((option) => selectedSet.has(String(option.id)))
+      .map((option) => option.name)
+  ), [options, selectedSet]);
+
+  const toggleOption = (id: string) => {
+    if (selectedSet.has(id)) {
+      onChange(selectedIds.filter((value) => value !== id));
+    } else {
+      onChange([...selectedIds, id]);
+    }
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className="relative">
+      <label className="block text-sm text-gray-600 mb-1">{label}</label>
+      <button
+        type="button"
+        data-testid={`${testIdPrefix}-trigger`}
+        aria-expanded={open}
+        className="h-11 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="truncate">
+          {selectedIds.length === 0 ? placeholder : `${selectedIds.length} selected`}
+        </span>
+        <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {selectedIds.length > 0 && (
+        <p className="text-xs text-gray-500 mt-1 truncate">{selectedLabels.join(', ')}</p>
+      )}
+
+      {open && (
+        <div className="absolute z-20 mt-2 w-full rounded-md border border-gray-200 bg-white shadow-lg">
+          <div className="p-2 border-b border-gray-100">
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search..."
+            />
+          </div>
+          <div className="max-h-56 overflow-y-auto p-1">
+            {filteredOptions.length === 0 && (
+              <p className="px-2 py-2 text-xs text-gray-500">No matching options.</p>
+            )}
+            {filteredOptions.map((option) => {
+              const id = String(option.id);
+              const checked = selectedSet.has(id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  data-testid={`${testIdPrefix}-option-${id}`}
+                  className={`w-full rounded px-2 py-2 text-left text-sm flex items-start gap-2 ${checked ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}
+                  onClick={() => toggleOption(id)}
+                >
+                  <input type="checkbox" readOnly checked={checked} className="mt-1" />
+                  <span className="truncate">{option.name} ({option.email})</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PatientListPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [patients, setPatients] = useState<PatientRecord[]>([]);
@@ -88,20 +231,23 @@ export function PatientListPage() {
     assignedOrthodontist: '',
     registrationDate: ''
   });
+  const [patientCounts, setPatientCounts] = useState({ active: 0, inactive: 0 });
+  const [refreshing, setRefreshing] = useState(false);
 
   const [createForm, setCreateForm] = useState(initialForm);
   const [editForm, setEditForm] = useState(initialForm);
-  const [createOrthodontistId, setCreateOrthodontistId] = useState('');
-  const [assignRole, setAssignRole] = useState<'ORTHODONTIST' | 'DENTAL_SURGEON' | 'STUDENT'>('ORTHODONTIST');
-  const [assignMemberId, setAssignMemberId] = useState('');
+  const [assignOrthodontistIds, setAssignOrthodontistIds] = useState<string[]>([]);
+  const [assignSurgeonIds, setAssignSurgeonIds] = useState<string[]>([]);
+  const [assignStudentIds, setAssignStudentIds] = useState<string[]>([]);
 
   const navigate = useNavigate();
   const { user } = useAuth();
 
   const canCreatePatients = user?.role === 'RECEPTION';
-  const canManagePatientDirectory = ['RECEPTION', 'NURSE'].includes(user?.role || '');
+  const canManagePatientDirectory = user?.role === 'RECEPTION';
   const canDeletePatients = user?.role === 'ADMIN';
   const canOrthoAssignCareTeam = user?.role === 'ORTHODONTIST';
+  const canAssignCareTeam = ['RECEPTION', 'ORTHODONTIST'].includes(user?.role || '');
   const canFilterByAssignedOrthodontist = ['ADMIN', 'RECEPTION', 'DENTAL_SURGEON', 'STUDENT', 'NURSE'].includes(user?.role || '');
 
   const loadPatients = async (
@@ -153,7 +299,7 @@ export function PatientListPage() {
   };
 
   const loadAssignableStaff = async () => {
-    if (!canOrthoAssignCareTeam) return;
+    if (!canAssignCareTeam) return;
     try {
       const response = await apiService.patients.getAssignableStaff(['DENTAL_SURGEON', 'STUDENT']);
       const rows = response.data || [];
@@ -163,10 +309,32 @@ export function PatientListPage() {
     }
   };
 
+  const loadPatientCounts = async () => {
+    try {
+      const statsResponse = await apiService.patients.getStats();
+      const activeCount = Number(statsResponse.data?.overview?.total_patients || 0);
+
+      let inactiveCount = 0;
+      if (canDeletePatients) {
+        const inactiveResponse = await apiService.patients.getList({
+          page: 1,
+          limit: 1,
+          deleted: 'inactive'
+        });
+        inactiveCount = Number(inactiveResponse.data?.pagination?.total_records || 0);
+      }
+
+      setPatientCounts({ active: activeCount, inactive: inactiveCount });
+    } catch {
+      setPatientCounts({ active: 0, inactive: 0 });
+    }
+  };
+
   useEffect(() => {
     loadPatients('', adminDeletedFilter);
     loadOrthodontists();
     loadAssignableStaff();
+    loadPatientCounts();
   }, [user?.role]);
 
   useEffect(() => {
@@ -219,16 +387,15 @@ export function PatientListPage() {
     return count;
   }, [activeFilters, canFilterByAssignedOrthodontist]);
 
-  const getTodayDate = () => new Date().toISOString().slice(0, 10);
+  const filteredPatients = patients;
 
-  const filteredPatients = useMemo(() => {
-    if (!searchTerm.trim()) return patients;
-    const q = searchTerm.toLowerCase();
-    return patients.filter((p) =>
-      `${p.first_name} ${p.last_name}`.toLowerCase().includes(q) ||
-      p.patient_code.toLowerCase().includes(q)
-    );
-  }, [patients, searchTerm]);
+  useEffect(() => {
+    if (createOpen || editOpen || assignOpen) return;
+    const handle = window.setTimeout(() => {
+      loadPatients(searchTerm, adminDeletedFilter, false);
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [searchTerm, adminDeletedFilter, activeFilters, createOpen, editOpen, assignOpen]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -249,19 +416,12 @@ export function PatientListPage() {
       };
 
       const created = await apiService.patients.create(createPayload);
-      const patientId = created.data?.id;
-
-      if (patientId && createOrthodontistId) {
-        await apiService.patients.assign(String(patientId), {
-          user_id: Number(createOrthodontistId),
-          assignment_role: 'ORTHODONTIST'
-        });
-      }
+      void created;
 
       setCreateForm(initialForm);
-      setCreateOrthodontistId('');
       setCreateOpen(false);
       await loadPatients(searchTerm);
+      await loadPatientCounts();
     } catch (err: any) {
       setError(err?.message || 'Failed to create patient');
     } finally {
@@ -272,7 +432,7 @@ export function PatientListPage() {
   const openCreateModal = () => {
     setCreateForm({
       ...initialForm,
-      registration_date: getTodayDate()
+      registration_date: getCurrentDateTimeLocal()
     });
     setCreateOpen(true);
   };
@@ -288,7 +448,7 @@ export function PatientListPage() {
       setEditForm({
         first_name: patient.first_name || '',
         last_name: patient.last_name || '',
-        registration_date: patient.created_at ? String(patient.created_at).slice(0, 10) : '',
+        registration_date: toDateTimeLocalValue(patient.created_at),
         date_of_birth: patient.date_of_birth ? String(patient.date_of_birth).slice(0, 10) : '',
         age: patient.age ? String(patient.age) : '',
         gender: patient.gender || 'FEMALE',
@@ -314,6 +474,7 @@ export function PatientListPage() {
       await apiService.patients.update(String(selectedPatientId), {
         first_name: editForm.first_name,
         last_name: editForm.last_name,
+        registration_date: editForm.registration_date || undefined,
         date_of_birth: editForm.date_of_birth || undefined,
         age: editForm.age ? Number(editForm.age) : undefined,
         gender: editForm.gender,
@@ -325,6 +486,7 @@ export function PatientListPage() {
       setEditOpen(false);
       setSelectedPatientId(null);
       await loadPatients(searchTerm);
+      await loadPatientCounts();
     } catch (err: any) {
       setError(err?.message || 'Failed to update patient');
     } finally {
@@ -333,30 +495,40 @@ export function PatientListPage() {
   };
 
   const openAssignModal = (patientId: number) => {
+    if (!canAssignCareTeam) return;
     setSelectedPatientId(patientId);
-    if (canOrthoAssignCareTeam) {
-      setAssignRole('DENTAL_SURGEON');
-    } else {
-      setAssignRole('ORTHODONTIST');
-    }
-    setAssignMemberId('');
+    setAssignOrthodontistIds([]);
+    setAssignSurgeonIds([]);
+    setAssignStudentIds([]);
     setAssignOpen(true);
   };
 
   const handleAssign = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPatientId || !assignMemberId) return;
+    if (!selectedPatientId) return;
+
+    const assignments = canOrthoAssignCareTeam
+      ? [
+          ...assignSurgeonIds.map((id) => ({ user_id: Number(id), assignment_role: 'DENTAL_SURGEON' as const })),
+          ...assignStudentIds.map((id) => ({ user_id: Number(id), assignment_role: 'STUDENT' as const }))
+        ]
+      : [
+          ...assignOrthodontistIds.map((id) => ({ user_id: Number(id), assignment_role: 'ORTHODONTIST' as const })),
+          ...assignSurgeonIds.map((id) => ({ user_id: Number(id), assignment_role: 'DENTAL_SURGEON' as const }))
+        ];
+    if (!assignments.length) return;
+
     setSaving(true);
     setError(null);
     try {
-      await apiService.patients.assign(String(selectedPatientId), {
-        user_id: Number(assignMemberId),
-        assignment_role: assignRole
-      });
+      await apiService.patients.bulkAssign(String(selectedPatientId), assignments);
       setAssignOpen(false);
       setSelectedPatientId(null);
-      setAssignMemberId('');
+      setAssignOrthodontistIds([]);
+      setAssignSurgeonIds([]);
+      setAssignStudentIds([]);
       await loadPatients(searchTerm);
+      await loadPatientCounts();
     } catch (err: any) {
       setError(err?.message || 'Failed to assign care team member');
     } finally {
@@ -364,10 +536,14 @@ export function PatientListPage() {
     }
   };
 
-  const assignCandidates = useMemo(() => {
-    if (assignRole === 'ORTHODONTIST') return orthodontists;
-    return assignableStaff.filter((s) => s.role === assignRole);
-  }, [assignRole, orthodontists, assignableStaff]);
+  const assignableSurgeons = useMemo(
+    () => assignableStaff.filter((s) => s.role === 'DENTAL_SURGEON'),
+    [assignableStaff]
+  );
+  const assignableStudents = useMemo(
+    () => assignableStaff.filter((s) => s.role === 'STUDENT'),
+    [assignableStaff]
+  );
 
   const handleDeletePatient = async (patientId: number, patientName: string, permanent = false) => {
     const confirmed = window.confirm(
@@ -383,6 +559,7 @@ export function PatientListPage() {
       await apiService.patients.delete(String(patientId), permanent);
       localStorage.setItem('patients_updated_at', String(Date.now()));
       await loadPatients(searchTerm, adminDeletedFilter);
+      await loadPatientCounts();
     } catch (err: any) {
       setError(err?.message || (permanent ? 'Failed to permanently delete patient' : 'Failed to delete patient'));
     } finally {
@@ -400,6 +577,7 @@ export function PatientListPage() {
       await apiService.patients.reactivate(String(patientId));
       localStorage.setItem('patients_updated_at', String(Date.now()));
       await loadPatients(searchTerm, adminDeletedFilter);
+      await loadPatientCounts();
     } catch (err: any) {
       setError(err?.message || 'Failed to reactivate patient');
     } finally {
@@ -420,9 +598,22 @@ export function PatientListPage() {
     return 'O';
   };
 
-  const formatDate = (iso?: string | null) => {
-    if (!iso) return '-';
-    return String(iso).slice(0, 10);
+  const handleManualRefresh = async () => {
+    const startedAt = Date.now();
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        loadPatients(searchTerm, adminDeletedFilter, true),
+        loadPatientCounts()
+      ]);
+    } finally {
+      const elapsed = Date.now() - startedAt;
+      const minVisibleMs = 650;
+      if (elapsed < minVisibleMs) {
+        await new Promise((resolve) => setTimeout(resolve, minVisibleMs - elapsed));
+      }
+      setRefreshing(false);
+    }
   };
 
   return (
@@ -431,6 +622,12 @@ export function PatientListPage() {
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Patient Directory</h2>
           <p className="text-gray-500">Manage hospital patient records and cases.</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+            <Badge variant="success">Active Patients: {patientCounts.active}</Badge>
+            <Badge variant="neutral">
+              Inactive Patients: {canDeletePatients ? patientCounts.inactive : 'Restricted'}
+            </Badge>
+          </div>
         </div>
         {canCreatePatients && (
           <Button className="flex items-center gap-2" onClick={openCreateModal}>
@@ -490,7 +687,16 @@ export function PatientListPage() {
               <Filter className="w-4 h-4" />
               Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
             </Button>
-            <Button variant="secondary" onClick={() => loadPatients(searchTerm, adminDeletedFilter)}>Refresh</Button>
+            <Button
+              variant="secondary"
+              className={`flex items-center gap-2 transition-all ${refreshing ? 'ring-2 ring-blue-200 bg-blue-50 border-blue-200 text-blue-700' : ''}`}
+              onClick={handleManualRefresh}
+              disabled={refreshing}
+              aria-busy={refreshing}
+            >
+              <RefreshCcw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Refreshing...' : 'Refresh'}
+            </Button>
           </div>
         </div>
         {showFilters && (
@@ -541,7 +747,6 @@ export function PatientListPage() {
               <th className="px-6 py-4 font-semibold text-gray-600">Full Name</th>
               <th className="px-6 py-4 font-semibold text-gray-600">Age / Sex</th>
               <th className="px-6 py-4 font-semibold text-gray-600">Assigned Care Team</th>
-              <th className="px-6 py-4 font-semibold text-gray-600">Last Visit</th>
               <th className="px-6 py-4 font-semibold text-gray-600">Status</th>
               <th className="px-6 py-4 font-semibold text-gray-600">Actions</th>
             </tr>
@@ -566,7 +771,6 @@ export function PatientListPage() {
                     <div><span className="text-gray-400">Student:</span> {p.assigned_student_name || 'Unassigned'}</div>
                   </div>
                 </td>
-                <td className="px-6 py-4 text-gray-500">{formatDate(p.last_visit)}</td>
                 <td className="px-6 py-4">
                   <Badge variant={statusVariant((p.display_status || p.status) as PatientRecord['status'])}>
                     {p.display_status || p.status}
@@ -586,16 +790,18 @@ export function PatientListPage() {
                         <Pencil className="w-3 h-3 mr-1" />
                         Edit
                       </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openAssignModal(p.id);
-                        }}
-                      >
-                        Assign Ortho
-                      </Button>
+                      {canAssignCareTeam && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openAssignModal(p.id);
+                          }}
+                        >
+                          Assign Team
+                        </Button>
+                      )}
                     </div>
                   )}
                   {canOrthoAssignCareTeam && (
@@ -677,26 +883,32 @@ export function PatientListPage() {
                   onChange={(e) => setCreateForm((s) => ({ ...s, last_name: e.target.value }))}
                   required
                 />
-                <Input
-                  type="date"
-                  value={createForm.registration_date}
-                  onChange={(e) => setCreateForm((s) => ({ ...s, registration_date: e.target.value }))}
-                />
-                <Input
-                  type="date"
-                  value={createForm.date_of_birth}
-                  onChange={(e) =>
-                    setCreateForm((s) => {
-                      const date_of_birth = e.target.value;
-                      return {
-                        ...s,
-                        date_of_birth,
-                        age: calculateAgeFromDob(date_of_birth)
-                      };
-                    })
-                  }
-                  required
-                />
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Registration Date &amp; Time</label>
+                  <Input
+                    type="datetime-local"
+                    value={createForm.registration_date}
+                    onChange={(e) => setCreateForm((s) => ({ ...s, registration_date: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Birth Date</label>
+                  <Input
+                    type="date"
+                    value={createForm.date_of_birth}
+                    onChange={(e) =>
+                      setCreateForm((s) => {
+                        const date_of_birth = e.target.value;
+                        return {
+                          ...s,
+                          date_of_birth,
+                          age: calculateAgeFromDob(date_of_birth)
+                        };
+                      })
+                    }
+                    required
+                  />
+                </div>
                 <Input
                   type="number"
                   min={0}
@@ -737,22 +949,6 @@ export function PatientListPage() {
                 onChange={(e) => setCreateForm((s) => ({ ...s, province: e.target.value }))}
               />
 
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Assign Orthodontist (optional)</label>
-                <select
-                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={createOrthodontistId}
-                  onChange={(e) => setCreateOrthodontistId(e.target.value)}
-                >
-                  <option value="">No assignment</option>
-                  {orthodontists.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name} ({o.email})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)} disabled={saving}>
                   Cancel
@@ -784,25 +980,31 @@ export function PatientListPage() {
                   onChange={(e) => setEditForm((s) => ({ ...s, last_name: e.target.value }))}
                   required
                 />
-                <Input
-                  type="date"
-                  value={editForm.registration_date}
-                  disabled
-                />
-                <Input
-                  type="date"
-                  value={editForm.date_of_birth}
-                  onChange={(e) =>
-                    setEditForm((s) => {
-                      const date_of_birth = e.target.value;
-                      return {
-                        ...s,
-                        date_of_birth,
-                        age: calculateAgeFromDob(date_of_birth)
-                      };
-                    })
-                  }
-                />
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Registration Date &amp; Time</label>
+                  <Input
+                    type="datetime-local"
+                    value={editForm.registration_date}
+                    onChange={(e) => setEditForm((s) => ({ ...s, registration_date: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Birth Date</label>
+                  <Input
+                    type="date"
+                    value={editForm.date_of_birth}
+                    onChange={(e) =>
+                      setEditForm((s) => {
+                        const date_of_birth = e.target.value;
+                        return {
+                          ...s,
+                          date_of_birth,
+                          age: calculateAgeFromDob(date_of_birth)
+                        };
+                      })
+                    }
+                  />
+                </div>
                 <Input
                   type="number"
                   min={0}
@@ -860,45 +1062,56 @@ export function PatientListPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="w-full max-w-lg rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
             <h3 className="text-xl font-bold text-gray-900 mb-4">
-              {canOrthoAssignCareTeam ? 'Assign Care Team Member' : 'Assign Orthodontist'}
+              {canOrthoAssignCareTeam ? 'Assign Care Team (Multiple)' : 'Assign Care Team (Multiple)'}
             </h3>
             <form className="space-y-4" onSubmit={handleAssign}>
               {canOrthoAssignCareTeam && (
-                <select
-                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={assignRole}
-                  onChange={(e) => {
-                    const role = e.target.value as 'DENTAL_SURGEON' | 'STUDENT';
-                    setAssignRole(role);
-                    setAssignMemberId('');
-                  }}
-                >
-                  <option value="DENTAL_SURGEON">Dental Surgeon</option>
-                  <option value="STUDENT">Student</option>
-                </select>
+                <>
+                  <MultiSelectDropdown
+                    label="Assign Dental Surgeons (optional, multiple)"
+                    options={assignableSurgeons}
+                    selectedIds={assignSurgeonIds}
+                    onChange={setAssignSurgeonIds}
+                    placeholder="Select dental surgeons"
+                    testIdPrefix="assign-surgeons"
+                  />
+                  <MultiSelectDropdown
+                    label="Assign Students (optional, multiple)"
+                    options={assignableStudents}
+                    selectedIds={assignStudentIds}
+                    onChange={setAssignStudentIds}
+                    placeholder="Select students"
+                    testIdPrefix="assign-students"
+                  />
+                </>
               )}
-              <select
-                className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={assignMemberId}
-                onChange={(e) => setAssignMemberId(e.target.value)}
-                required
-              >
-                <option value="">
-                  {assignRole === 'ORTHODONTIST' ? 'Select orthodontist' : `Select ${assignRole === 'DENTAL_SURGEON' ? 'dental surgeon' : 'student'}`}
-                </option>
-                {assignCandidates.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name} ({o.email})
-                  </option>
-                ))}
-              </select>
+              {!canOrthoAssignCareTeam && (
+                <>
+                  <MultiSelectDropdown
+                    label="Assign Orthodontists (optional, multiple)"
+                    options={orthodontists}
+                    selectedIds={assignOrthodontistIds}
+                    onChange={setAssignOrthodontistIds}
+                    placeholder="Select orthodontists"
+                    testIdPrefix="assign-orthodontists"
+                  />
+                  <MultiSelectDropdown
+                    label="Assign Dental Surgeons (optional, multiple)"
+                    options={assignableSurgeons}
+                    selectedIds={assignSurgeonIds}
+                    onChange={setAssignSurgeonIds}
+                    placeholder="Select dental surgeons"
+                    testIdPrefix="assign-surgeons"
+                  />
+                </>
+              )}
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="secondary" onClick={() => setAssignOpen(false)} disabled={saving}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={saving}>
-                  {saving ? 'Saving...' : 'Assign'}
+                  {saving ? 'Saving...' : 'Assign Selected'}
                 </Button>
               </div>
             </form>

@@ -64,12 +64,12 @@ const sendAppointmentReminderEmail = async ({
   const transport = buildTransport();
   const formattedDate = formatReminderDateTime(visitDate);
   const subject = `${clinicName} Appointment Reminder`;
-  const text = `Dear ${patientName}, this is a reminder for your appointment on ${formattedDate}. Visit type: ${procedureType || 'Clinic visit'}.`;
+  const text = `Dear ${patientName}, this is a reminder for your appointment on ${formattedDate}. Visit type: ${procedureType || 'Clinic visit'}.\nUniversity Dental Hospital\nPeradeniya`;
   const html = `
     <p>Dear ${patientName},</p>
     <p>This is a reminder for your appointment on <strong>${formattedDate}</strong>.</p>
     <p>Visit type: <strong>${procedureType || 'Clinic visit'}</strong></p>
-    <p>University Dental Hospital</p>
+    <p>University Dental Hospital<br/>Peradeniya</p>
   `;
 
   if (!transport) {
@@ -80,7 +80,53 @@ const sendAppointmentReminderEmail = async ({
     return { sent: false, simulated: true };
   }
 
-  await transport.verify();
+  const mailResult = await transport.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to,
+    subject,
+    text,
+    html
+  });
+
+  return { sent: true, simulated: false, messageId: mailResult.messageId };
+};
+
+const sendInitialPasswordEmail = async ({
+  to,
+  name,
+  temporaryPassword,
+  isReset = false,
+  appName = 'OrthoFlow'
+}) => {
+  const transport = buildTransport();
+  const subject = isReset
+    ? `${appName} password reset`
+    : `${appName} account created - temporary password`;
+  const text = isReset
+    ? `Hello ${name}, your password has been reset. Temporary password: ${temporaryPassword}. Please sign in and change it immediately.`
+    : `Hello ${name}, your ${appName} account is ready. Temporary password: ${temporaryPassword}. Please sign in and change it immediately.`;
+  const html = isReset
+    ? `
+      <p>Hello ${name},</p>
+      <p>Your password has been reset by an administrator.</p>
+      <p><strong>Temporary password:</strong> ${temporaryPassword}</p>
+      <p>Please sign in and change your password immediately.</p>
+    `
+    : `
+      <p>Hello ${name},</p>
+      <p>Your ${appName} account has been created.</p>
+      <p><strong>Temporary password:</strong> ${temporaryPassword}</p>
+      <p>Please sign in and change your password immediately.</p>
+    `;
+
+  if (!transport) {
+    if (!isSimulationEnabled()) {
+      throw new Error('SMTP is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM.');
+    }
+    const mode = isReset ? 'EMAIL_PASSWORD_RESET_SIMULATED' : 'EMAIL_INITIAL_PASSWORD_SIMULATED';
+    console.log(`[${mode}] to=${to} subject="${subject}" body="${text}"`);
+    return { sent: false, simulated: true };
+  }
 
   const mailResult = await transport.sendMail({
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
@@ -94,5 +140,6 @@ const sendAppointmentReminderEmail = async ({
 };
 
 module.exports = {
-  sendAppointmentReminderEmail
+  sendAppointmentReminderEmail,
+  sendInitialPasswordEmail
 };

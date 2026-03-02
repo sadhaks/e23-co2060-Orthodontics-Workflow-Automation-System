@@ -1,6 +1,6 @@
 const express = require('express');
 const { validate, schemas } = require('../middleware/validation');
-const { authenticate, authorizeOwnership } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const clinicalNoteController = require('../controllers/clinicalNoteController');
 const { requirePermission, OBJECT_TYPES, PERMISSIONS } = require('../middleware/accessControl');
@@ -45,8 +45,13 @@ router.put('/:id',
 // DELETE /api/clinical-notes/:id - Delete clinical note
 router.delete('/:id', 
   requirePermission(OBJECT_TYPES.PATIENT_NOTES, PERMISSIONS.DELETE, { resolvePatientId: resolvePatientIdFromNoteId }),
-  authorizeOwnership('clinical_note'),
   asyncHandler(clinicalNoteController.deleteClinicalNote)
+);
+
+// PUT /api/clinical-notes/:id/restore - Restore clinical note from bin
+router.put('/:id/restore',
+  requirePermission(OBJECT_TYPES.PATIENT_NOTES, PERMISSIONS.DELETE, { resolvePatientId: resolvePatientIdFromNoteId }),
+  asyncHandler(clinicalNoteController.restoreClinicalNote)
 );
 
 // POST /api/clinical-notes/:id/verify - Verify clinical note

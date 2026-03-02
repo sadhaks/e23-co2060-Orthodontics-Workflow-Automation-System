@@ -9,6 +9,14 @@ const path = require('path');
 // Import middleware
 const { testConnection, ensureAccessControlSchema } = require('./src/config/database');
 const { errorHandler, notFound, requestLogger } = require('./src/middleware/errorHandler');
+const {
+  startAuditLogRetentionJob,
+  stopAuditLogRetentionJob
+} = require('./src/services/auditRetentionService');
+const {
+  startAutoReminderJob,
+  stopAutoReminderJob
+} = require('./src/services/reminderService');
 
 // Import routes
 const authRoutes = require('./src/routes/auth');
@@ -130,11 +138,15 @@ process.on('uncaughtException', (err) => {
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
+  stopAuditLogRetentionJob();
+  stopAutoReminderJob();
   console.log('SIGTERM received. Shutting down gracefully...');
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
+  stopAuditLogRetentionJob();
+  stopAutoReminderJob();
   console.log('SIGINT received. Shutting down gracefully...');
   process.exit(0);
 });
@@ -145,6 +157,8 @@ async function startServer() {
     await testConnection();
     await ensureAccessControlSchema();
     console.log('✅ Database connected successfully');
+    startAuditLogRetentionJob();
+    startAutoReminderJob();
     
     const PORT = process.env.PORT || 3000;
     

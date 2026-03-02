@@ -6,7 +6,7 @@ const {
   query
 } = require('../config/database');
 const { logAuditEvent } = require('../middleware/errorHandler');
-const { sendAppointmentReminderEmail } = require('../services/emailService');
+const { sendManualReminder } = require('../services/reminderService');
 
 const normalizeVisitDateForDb = (value) => {
   if (typeof value !== 'string') return null;
@@ -138,10 +138,10 @@ const getVisitById = async (req, res) => {
 // Create new visit
 const createVisit = async (req, res) => {
   try {
-    if (!['RECEPTION', 'NURSE'].includes(req.user.role)) {
+    if (req.user.role !== 'RECEPTION') {
       return res.status(403).json({
         success: false,
-        message: 'Only receptionist or nurse can schedule appointments'
+        message: 'Only receptionist can schedule appointments'
       });
     }
 
@@ -217,10 +217,10 @@ const createVisit = async (req, res) => {
 // Update visit
 const updateVisit = async (req, res) => {
   try {
-    if (!['RECEPTION', 'NURSE'].includes(req.user.role)) {
+    if (req.user.role !== 'RECEPTION') {
       return res.status(403).json({
         success: false,
-        message: 'Only receptionist or nurse can update appointment attendance'
+        message: 'Only receptionist can update appointment attendance'
       });
     }
 
@@ -461,69 +461,37 @@ const getVisitStats = async (req, res) => {
 
 const sendVisitReminder = async (req, res) => {
   try {
-    if (!['RECEPTION', 'NURSE'].includes(req.user.role)) {
+    if (req.user.role !== 'RECEPTION') {
       return res.status(403).json({
         success: false,
-        message: 'Only receptionist or nurse can send appointment reminders'
+        message: 'Only receptionist can send appointment reminders'
       });
     }
 
     const { id } = req.params;
-    const visitRows = await query(
-      `SELECT v.id, v.patient_id, v.visit_date, v.procedure_type, v.status,
-              p.first_name, p.last_name, p.email AS patient_email
-       FROM visits v
-       JOIN patients p ON p.id = v.patient_id
-       WHERE v.id = ? AND p.deleted_at IS NULL
-       LIMIT 1`,
-      [id]
-    );
-
-    const visit = visitRows[0];
-    if (!visit) {
-      return res.status(404).json({
+    const outcome = await sendManualReminder({ visitId: id, initiatedBy: req.user.id });
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({
         success: false,
-        message: 'Visit not found'
+        message: outcome.message
       });
     }
-
-    if (visit.status !== 'SCHEDULED') {
-      return res.status(400).json({
-        success: false,
-        message: 'Reminders can only be sent for scheduled appointments'
-      });
-    }
-
-    if (!visit.patient_email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Patient has no email on record'
-      });
-    }
-
-    const patientName = `${visit.first_name} ${visit.last_name}`;
-    const result = await sendAppointmentReminderEmail({
-      to: visit.patient_email,
-      patientName,
-      visitDate: visit.visit_date,
-      procedureType: visit.procedure_type
-    });
-
-    await logAuditEvent(req.user.id, 'SEND_REMINDER', 'VISIT', id, null, {
-      patient_id: visit.patient_id,
-      email: visit.patient_email,
-      simulated: result.simulated
-    });
 
     res.json({
       success: true,
-      message: result.simulated
-        ? 'Reminder recorded (SMTP not configured, simulated send)'
-        : 'Appointment reminder sent',
+      message: outcome.already_sent
+        ? 'Appointment reminder was already sent earlier'
+        : (outcome.simulated ? 'Appointment reminder simulated' : 'Appointment reminder sent successfully'),
       data: {
-        visit_id: visit.id,
-        patient_email: visit.patient_email,
-        simulated: result.simulated
+        visit_id: outcome.visit.id,
+        patient_email: outcome.visit.patient_email,
+        queued: false,
+        delivery: outcome.already_sent
+          ? 'already_sent'
+          : (outcome.simulated ? 'simulated' : 'sent'),
+        simulated: !!outcome.simulated,
+        already_sent: !!outcome.already_sent,
+        message_id: outcome.messageId || null
       }
     });
   } catch (error) {

@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 
 export function SettingsPage() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -74,7 +74,11 @@ export function SettingsPage() {
     <div className="max-w-2xl">
       <Card className="p-8">
         <h2 className="text-2xl font-bold mb-2">Settings</h2>
-        <p className="text-gray-500 mb-6">Change your account password.</p>
+        <p className="text-gray-500 mb-6">
+          {user?.must_change_password
+            ? 'You must change your temporary password before continuing.'
+            : 'Change your account password.'}
+        </p>
 
         {error && (
           <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

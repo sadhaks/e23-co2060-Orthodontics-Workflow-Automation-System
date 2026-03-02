@@ -1,6 +1,5 @@
 const { 
   findOne, 
-  findMany, 
   insert, 
   update, 
   remove,
@@ -18,39 +17,49 @@ const getInventory = async (req, res) => {
       category, 
       search,
       alert_level,
+      deleted = 'active',
       sort = 'name',
       order = 'ASC'
     } = req.query;
     const offset = (page - 1) * limit;
+    const deletedMode = ['active', 'trashed', 'all'].includes(String(deleted).toLowerCase())
+      ? String(deleted).toLowerCase()
+      : 'active';
 
-    let whereClause = 'WHERE 1=1';
+    let whereClause = 'WHERE i.purged_at IS NULL';
     let queryParams = [];
 
+    if (deletedMode === 'trashed') {
+      whereClause += ' AND i.deleted_at IS NOT NULL';
+    } else if (deletedMode === 'active') {
+      whereClause += ' AND i.deleted_at IS NULL';
+    }
+
     if (category) {
-      whereClause += ' AND category = ?';
+      whereClause += ' AND i.category = ?';
       queryParams.push(category);
     }
 
     if (search) {
-      whereClause += ' AND (name LIKE ? OR category LIKE ?)';
+      whereClause += ' AND (i.name LIKE ? OR i.category LIKE ?)';
       const searchTerm = `%${search}%`;
       queryParams.push(searchTerm, searchTerm);
     }
 
     if (alert_level) {
       if (alert_level === 'LOW_STOCK') {
-        whereClause += ' AND quantity <= minimum_threshold AND quantity > 0';
+        whereClause += ' AND i.quantity <= i.minimum_threshold AND i.quantity > 0';
       } else if (alert_level === 'OUT_OF_STOCK') {
-        whereClause += ' AND quantity = 0';
+        whereClause += ' AND i.quantity = 0';
       } else if (alert_level === 'NORMAL') {
-        whereClause += ' AND quantity > minimum_threshold';
+        whereClause += ' AND i.quantity > i.minimum_threshold';
       }
     }
 
     // Get total count
     const countQuery = `
       SELECT COUNT(*) as total 
-      FROM inventory_items 
+      FROM inventory_items i
       ${whereClause}
     `;
     const totalResult = await query(countQuery, queryParams);
@@ -99,6 +108,14 @@ const getInventory = async (req, res) => {
 const getInventoryItemById = async (req, res) => {
   try {
     const { id } = req.params;
+    const deletedMode = ['active', 'trashed', 'all'].includes(String(req.query.deleted || 'active').toLowerCase())
+      ? String(req.query.deleted || 'active').toLowerCase()
+      : 'active';
+    const deletedFilter = deletedMode === 'all'
+      ? ' AND i.purged_at IS NULL'
+      : deletedMode === 'trashed'
+        ? ' AND i.deleted_at IS NOT NULL AND i.purged_at IS NULL'
+        : ' AND i.deleted_at IS NULL AND i.purged_at IS NULL';
 
     const itemQuery = `
       SELECT 
@@ -109,7 +126,7 @@ const getInventoryItemById = async (req, res) => {
           ELSE 'NORMAL'
         END as alert_level
       FROM inventory_items i
-      WHERE i.id = ?
+      WHERE i.id = ?${deletedFilter}
     `;
 
     const items = await query(itemQuery, [id]);
@@ -157,7 +174,7 @@ const createInventoryItem = async (req, res) => {
     const itemData = req.body;
 
     // Check if item with same name already exists
-    const existingItem = await findOne('inventory_items', { name: itemData.name });
+    const existingItem = await findOne('inventory_items', { name: itemData.name, deleted_at: null, purged_at: null });
     if (existingItem) {
       return res.status(400).json({
         success: false,
@@ -206,7 +223,7 @@ const updateInventoryItem = async (req, res) => {
     const updateData = req.body;
 
     // Check if item exists
-    const existingItem = await findOne('inventory_items', { id });
+    const existingItem = await findOne('inventory_items', { id, deleted_at: null, purged_at: null });
     if (!existingItem) {
       return res.status(404).json({
         success: false,
@@ -216,7 +233,7 @@ const updateInventoryItem = async (req, res) => {
 
     // If updating name, check for duplicates
     if (updateData.name && updateData.name !== existingItem.name) {
-      const duplicateItem = await findOne('inventory_items', { name: updateData.name });
+      const duplicateItem = await findOne('inventory_items', { name: updateData.name, deleted_at: null, purged_at: null });
       if (duplicateItem) {
         return res.status(400).json({
           success: false,
@@ -231,7 +248,7 @@ const updateInventoryItem = async (req, res) => {
     await logAuditEvent(req.user.id, 'UPDATE', 'INVENTORY_ITEM', id, existingItem, updateData);
 
     // Return updated item
-    const updatedItem = await findOne('inventory_items', { id: id });
+    const updatedItem = await findOne('inventory_items', { id: id, deleted_at: null, purged_at: null });
 
     res.json({
       success: true,
@@ -251,8 +268,9 @@ const updateInventoryItem = async (req, res) => {
 const deleteInventoryItem = async (req, res) => {
   try {
     const { id } = req.params;
+    const permanent = String(req.query.permanent || '').toLowerCase() === 'true';
 
-    // Check if item exists
+    // Check if item exists (include items already in bin)
     const existingItem = await findOne('inventory_items', { id });
     if (!existingItem) {
       return res.status(404).json({
@@ -261,27 +279,109 @@ const deleteInventoryItem = async (req, res) => {
       });
     }
 
-    // Check if item has transactions
-    const transactionCount = await query('SELECT COUNT(*) as count FROM inventory_transactions WHERE item_id = ?', [id]);
-    
-    if (transactionCount[0].count > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete item with transaction history'
+    if (permanent) {
+      if (!existingItem.deleted_at) {
+        return res.status(400).json({
+          success: false,
+          message: 'Inventory item must be moved to bin before permanent deletion'
+        });
+      }
+
+      // Do not allow hard delete when history exists and FK constraints would fail
+      const transactionCount = await query('SELECT COUNT(*) as count FROM inventory_transactions WHERE item_id = ?', [id]);
+      if (Number(transactionCount[0]?.count || 0) > 0) {
+        await update('inventory_items', {
+          purged_at: new Date(),
+          purged_by: req.user.id
+        }, { id });
+      } else {
+        await remove('inventory_items', { id }, false);
+      }
+      await logAuditEvent(req.user.id, 'PERMANENT_DELETE', 'INVENTORY_ITEM', id, existingItem, null);
+
+      return res.json({
+        success: true,
+        message: 'Inventory item permanently deleted'
       });
     }
 
-    // Delete item
-    await remove('inventory_items', { id }, false);
+    if (existingItem.purged_at) {
+      return res.status(404).json({
+        success: false,
+        message: 'Inventory item not found'
+      });
+    }
 
-    await logAuditEvent(req.user.id, 'DELETE', 'INVENTORY_ITEM', id, existingItem, null);
+    if (existingItem.deleted_at) {
+      return res.status(400).json({
+        success: false,
+        message: 'Inventory item already in bin'
+      });
+    }
 
-    res.json({
+    await update('inventory_items', { deleted_at: new Date(), deleted_by: req.user.id }, { id });
+    await logAuditEvent(req.user.id, 'DELETE', 'INVENTORY_ITEM', id, existingItem, {
+      deleted_at: new Date(),
+      deleted_by: req.user.id
+    });
+
+    return res.json({
       success: true,
-      message: 'Inventory item deleted successfully'
+      message: 'Inventory item moved to bin'
     });
   } catch (error) {
     console.error('Delete inventory item error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Restore inventory item from bin
+const restoreInventoryItem = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existingItem = await findOne('inventory_items', { id });
+    if (!existingItem) {
+      return res.status(404).json({
+        success: false,
+        message: 'Inventory item not found'
+      });
+    }
+
+    if (!existingItem.deleted_at) {
+      return res.status(400).json({
+        success: false,
+        message: 'Inventory item is not in bin'
+      });
+    }
+
+    if (existingItem.purged_at) {
+      return res.status(400).json({
+        success: false,
+        message: 'Inventory item is permanently deleted and cannot be restored'
+      });
+    }
+
+    const activeDuplicate = await findOne('inventory_items', { name: existingItem.name, deleted_at: null, purged_at: null });
+    if (activeDuplicate && Number(activeDuplicate.id) !== Number(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'An active item with this name already exists'
+      });
+    }
+
+    await update('inventory_items', { deleted_at: null, deleted_by: null }, { id });
+    await logAuditEvent(req.user.id, 'RESTORE', 'INVENTORY_ITEM', id, existingItem, { deleted_at: null, deleted_by: null });
+
+    return res.json({
+      success: true,
+      message: 'Inventory item restored successfully'
+    });
+  } catch (error) {
+    console.error('Restore inventory item error:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -318,7 +418,7 @@ const updateStock = async (req, res) => {
     }
 
     // Get current item
-    const item = await findOne('inventory_items', { id });
+    const item = await findOne('inventory_items', { id, deleted_at: null, purged_at: null });
     if (!item) {
       return res.status(404).json({
         success: false,
@@ -363,7 +463,7 @@ const updateStock = async (req, res) => {
     );
 
     // Return updated item
-    const updatedItem = await findOne('inventory_items', { id });
+    const updatedItem = await findOne('inventory_items', { id, deleted_at: null, purged_at: null });
 
     res.json({
       success: true,
@@ -475,6 +575,8 @@ const getInventoryStats = async (req, res) => {
         SUM(quantity) as total_quantity,
         SUM(CASE WHEN quantity <= minimum_threshold THEN quantity ELSE 0 END) as critical_quantity
       FROM inventory_items
+      WHERE deleted_at IS NULL
+        AND purged_at IS NULL
     `;
 
     const stats = await query(statsQuery);
@@ -487,6 +589,8 @@ const getInventoryStats = async (req, res) => {
         SUM(quantity) as total_quantity,
         COUNT(CASE WHEN quantity <= minimum_threshold THEN 1 END) as low_stock_count
       FROM inventory_items
+      WHERE deleted_at IS NULL
+        AND purged_at IS NULL
       GROUP BY category
       ORDER BY item_count DESC
     `;
@@ -518,7 +622,9 @@ const getInventoryStats = async (req, res) => {
         minimum_threshold,
         unit
       FROM inventory_items
-      WHERE quantity <= minimum_threshold
+      WHERE deleted_at IS NULL
+        AND purged_at IS NULL
+        AND quantity <= minimum_threshold
       ORDER BY quantity ASC
       LIMIT 20
     `;
@@ -549,6 +655,7 @@ module.exports = {
   createInventoryItem,
   updateInventoryItem,
   deleteInventoryItem,
+  restoreInventoryItem,
   updateStock,
   getInventoryTransactions,
   getInventoryStats

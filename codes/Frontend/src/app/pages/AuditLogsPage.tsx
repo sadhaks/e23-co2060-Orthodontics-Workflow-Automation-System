@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Button, Input, Badge, Table } from '../components/UI';
-import { RefreshCcw } from 'lucide-react';
+import { CalendarDays, RefreshCcw } from 'lucide-react';
 import { apiService } from '../services/api';
 
 type AuditLog = {
@@ -63,6 +63,11 @@ const describeChange = (row: AuditLog) => {
     .join(' | ');
 };
 
+const formatDateTimeDisplay = (value: string) => {
+  if (!value) return 'Not selected';
+  return value.replace('T', ' ');
+};
+
 export function AuditLogsPage() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,7 +75,14 @@ export function AuditLogsPage() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [role, setRole] = useState('');
+  const [startDateTimeInput, setStartDateTimeInput] = useState('');
+  const [endDateTimeInput, setEndDateTimeInput] = useState('');
+  const [startDateTime, setStartDateTime] = useState('');
+  const [endDateTime, setEndDateTime] = useState('');
   const [page, setPage] = useState(1);
+  const [jumpPageInput, setJumpPageInput] = useState('1');
+  const startDateTimeRef = useRef<HTMLInputElement | null>(null);
+  const endDateTimeRef = useRef<HTMLInputElement | null>(null);
   const [pagination, setPagination] = useState({
     current_page: 1,
     total_pages: 1,
@@ -86,7 +98,9 @@ export function AuditLogsPage() {
         page,
         limit: PAGE_SIZE,
         search: search || undefined,
-        role: role || undefined
+        role: role || undefined,
+        start_date: startDateTime ? startDateTime.replace('T', ' ') : undefined,
+        end_date: endDateTime ? endDateTime.replace('T', ' ') : undefined
       });
       const payload = response.data || {};
       setLogs(payload.logs || []);
@@ -106,7 +120,11 @@ export function AuditLogsPage() {
 
   useEffect(() => {
     loadLogs();
-  }, [page, search, role]);
+  }, [page, search, role, startDateTime, endDateTime]);
+
+  useEffect(() => {
+    setJumpPageInput(String(pagination.current_page || 1));
+  }, [pagination.current_page]);
 
   const visibleRange = useMemo(() => {
     const from = pagination.total_records === 0 ? 0 : (pagination.current_page - 1) * pagination.limit + 1;
@@ -115,15 +133,47 @@ export function AuditLogsPage() {
   }, [pagination]);
 
   const applyFilters = () => {
+    if (startDateTimeInput && endDateTimeInput && startDateTimeInput > endDateTimeInput) {
+      setError('Start time cannot be after end time.');
+      return;
+    }
+    setError(null);
     setPage(1);
     setSearch(searchInput.trim());
+    setStartDateTime(startDateTimeInput);
+    setEndDateTime(endDateTimeInput);
   };
 
   const resetFilters = () => {
     setSearchInput('');
     setSearch('');
     setRole('');
+    setStartDateTimeInput('');
+    setEndDateTimeInput('');
+    setStartDateTime('');
+    setEndDateTime('');
+    setError(null);
     setPage(1);
+  };
+
+  const jumpToPage = () => {
+    const requested = Number.parseInt(jumpPageInput, 10);
+    if (!Number.isInteger(requested)) {
+      setJumpPageInput(String(pagination.current_page || 1));
+      return;
+    }
+    const nextPage = Math.min(Math.max(requested, 1), Math.max(pagination.total_pages, 1));
+    setPage(nextPage);
+    setJumpPageInput(String(nextPage));
+  };
+
+  const openDateTimePicker = (input: HTMLInputElement | null) => {
+    if (!input) return;
+    if (typeof input.showPicker === 'function') {
+      input.showPicker();
+      return;
+    }
+    input.focus();
   };
 
   return (
@@ -138,8 +188,8 @@ export function AuditLogsPage() {
         </Button>
       </div>
 
-      <Card className="p-4 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <Card className="p-5 space-y-5">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-x-6 gap-y-5">
           <Input
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
@@ -162,7 +212,53 @@ export function AuditLogsPage() {
               </option>
             ))}
           </select>
-          <div className="flex gap-2 md:col-span-2">
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-gray-600">Start (from)</label>
+            <div className="flex items-center gap-3">
+              <input
+                ref={startDateTimeRef}
+                type="datetime-local"
+                value={startDateTimeInput}
+                onChange={(e) => setStartDateTimeInput(e.target.value)}
+                className="h-0 w-0 opacity-0 pointer-events-none absolute"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                onClick={() => openDateTimePicker(startDateTimeRef.current)}
+                aria-label="Open start date and time picker"
+                title={startDateTimeInput || 'Select start date and time'}
+              >
+                <CalendarDays className="h-4 w-4" />
+              </Button>
+              <span className="text-xs text-gray-600">{formatDateTimeDisplay(startDateTimeInput)}</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-gray-600">End (to)</label>
+            <div className="flex items-center gap-3">
+              <input
+                ref={endDateTimeRef}
+                type="datetime-local"
+                value={endDateTimeInput}
+                onChange={(e) => setEndDateTimeInput(e.target.value)}
+                className="h-0 w-0 opacity-0 pointer-events-none absolute"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                onClick={() => openDateTimePicker(endDateTimeRef.current)}
+                aria-label="Open end date and time picker"
+                title={endDateTimeInput || 'Select end date and time'}
+              >
+                <CalendarDays className="h-4 w-4" />
+              </Button>
+              <span className="text-xs text-gray-600">{formatDateTimeDisplay(endDateTimeInput)}</span>
+            </div>
+          </div>
+          <div className="flex gap-3 md:col-span-2">
             <Button onClick={applyFilters}>Apply Filters</Button>
             <Button variant="secondary" onClick={resetFilters}>Reset</Button>
           </div>
@@ -213,11 +309,28 @@ export function AuditLogsPage() {
         </Table>
       </Card>
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((prev) => Math.max(1, prev - 1))}>
           Previous
         </Button>
-        <p className="text-sm text-gray-600">Page {pagination.current_page} of {pagination.total_pages}</p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-gray-600">Page {pagination.current_page} of {pagination.total_pages}</p>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              min={1}
+              max={Math.max(pagination.total_pages, 1)}
+              value={jumpPageInput}
+              onChange={(e) => setJumpPageInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') jumpToPage();
+              }}
+              className="h-9 w-24"
+              placeholder="Page"
+            />
+            <Button variant="secondary" onClick={jumpToPage}>Go</Button>
+          </div>
+        </div>
         <Button
           variant="secondary"
           disabled={page >= pagination.total_pages}

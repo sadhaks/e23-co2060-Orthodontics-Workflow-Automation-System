@@ -17,10 +17,10 @@ import { Badge, Button } from './UI';
 export function Sidebar() {
   const { user } = useAuth();
 
-  const canSeeQueue = ['ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'RECEPTION'].includes(user?.role || '');
+  const canSeeQueue = ['ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'STUDENT', 'NURSE', 'RECEPTION'].includes(user?.role || '');
   const canSeeCases = ['ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'STUDENT'].includes(user?.role || '');
   const canSeeReports = user?.role === 'ADMIN';
-  const canSeeMaterials = ['ADMIN'].includes(user?.role || '');
+  const canSeeMaterials = ['ADMIN', 'NURSE'].includes(user?.role || '');
 
   const navItems = [
     { name: 'Dashboard', icon: LayoutDashboard, path: '/', visible: true },

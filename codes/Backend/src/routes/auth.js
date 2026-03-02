@@ -21,11 +21,18 @@ const authLimiter = rateLimit({
 
 // Apply rate limiting to login route
 router.use('/login', authLimiter);
+router.use('/google', authLimiter);
 
 // POST /api/auth/login - User login
 router.post('/login', 
   validate(schemas.login),
   asyncHandler(authController.login)
+);
+
+// POST /api/auth/google - Google ID token login
+router.post('/google',
+  validate(schemas.googleLogin),
+  asyncHandler(authController.googleLogin)
 );
 
 // POST /api/auth/refresh - Refresh access token

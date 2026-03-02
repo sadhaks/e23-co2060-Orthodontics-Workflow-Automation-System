@@ -6,6 +6,87 @@ const {
 } = require('../config/auth');
 const { findOne, findMany, insert, update, remove } = require('../config/database');
 const { logAuditEvent } = require('../middleware/errorHandler');
+const SESSION_TIMEOUT_SECONDS = Number(process.env.SESSION_TIMEOUT_SECONDS || 3600);
+
+const issueSessionTokens = async (user) => {
+  const payload = {
+    userId: user.id,
+    role: user.role,
+    department: user.department
+  };
+
+  const accessToken = generateAccessToken(payload);
+  const refreshToken = generateRefreshToken(payload);
+
+  const refreshTokenHash = bcrypt.hashSync(refreshToken, 10);
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + 7);
+
+  await insert('refresh_tokens', {
+    user_id: user.id,
+    token_hash: refreshTokenHash,
+    expires_at: expiresAt
+  });
+
+  return {
+    accessToken,
+    refreshToken
+  };
+};
+
+const verifyGoogleIdToken = async (idToken) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
+      { signal: controller.signal }
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json();
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    const issuer = payload.iss;
+    if (issuer !== 'https://accounts.google.com' && issuer !== 'accounts.google.com') {
+      return null;
+    }
+
+    if (payload.email_verified !== 'true' && payload.email_verified !== true) {
+      return null;
+    }
+
+    const exp = Number(payload.exp || 0);
+    const now = Math.floor(Date.now() / 1000);
+    if (!exp || exp <= now) {
+      return null;
+    }
+
+    const allowedClientIds = String(process.env.GOOGLE_CLIENT_ID || '')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+
+    if (allowedClientIds.length === 0) {
+      return null;
+    }
+
+    if (!allowedClientIds.includes(payload.aud)) {
+      return null;
+    }
+
+    return payload;
+  } catch (error) {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
 
 // Login controller
 const login = async (req, res) => {
@@ -40,26 +121,8 @@ const login = async (req, res) => {
       });
     }
 
-    // Generate tokens
-    const payload = {
-      userId: user.id,
-      role: user.role,
-      department: user.department
-    };
-
-    const accessToken = generateAccessToken(payload);
-    const refreshToken = generateRefreshToken(payload);
-
-    // Store refresh token in database
-    const refreshTokenHash = bcrypt.hashSync(refreshToken, 10);
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days from now
-
-    await insert('refresh_tokens', {
-      user_id: user.id,
-      token_hash: refreshTokenHash,
-      expires_at: expiresAt
-    });
+    // Generate and store tokens
+    const { accessToken, refreshToken } = await issueSessionTokens(user);
 
     // Log successful login
     await logAuditEvent(user.id, 'LOGIN', 'USER', user.id, null, {
@@ -68,7 +131,7 @@ const login = async (req, res) => {
     });
 
     // Update last login time
-    await update('users', { last_login: new Date() }, { id: user.id });
+    await update('users', { last_login: new Date(), last_activity_at: new Date() }, { id: user.id });
 
     res.json({
       success: true,
@@ -79,7 +142,8 @@ const login = async (req, res) => {
           name: user.name,
           email: user.email,
           role: user.role,
-          department: user.department
+          department: user.department,
+          must_change_password: Boolean(user.must_change_password)
         },
         tokens: {
           accessToken,
@@ -91,6 +155,74 @@ const login = async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Google Sign-In controller (ID token verification)
+const googleLogin = async (req, res) => {
+  try {
+    const { idToken } = req.body;
+
+    const googlePayload = await verifyGoogleIdToken(idToken);
+    if (!googlePayload || !googlePayload.email) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid Google token'
+      });
+    }
+
+    const email = String(googlePayload.email).toLowerCase();
+    const user = await findOne('users', { email });
+
+    if (!user) {
+      return res.status(403).json({
+        success: false,
+        message: 'No OrthoFlow account found for this Google email'
+      });
+    }
+
+    if (user.status !== 'ACTIVE') {
+      return res.status(401).json({
+        success: false,
+        message: 'Account is inactive. Please contact administrator.'
+      });
+    }
+
+    const { accessToken, refreshToken } = await issueSessionTokens(user);
+
+    await logAuditEvent(user.id, 'LOGIN_GOOGLE', 'USER', user.id, null, {
+      login_time: new Date(),
+      google_sub: googlePayload.sub || null,
+      ip_address: req.ip
+    });
+
+    await update('users', { last_login: new Date(), last_activity_at: new Date() }, { id: user.id });
+
+    return res.json({
+      success: true,
+      message: 'Google login successful',
+      data: {
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          department: user.department,
+          must_change_password: Boolean(user.must_change_password)
+        },
+        tokens: {
+          accessToken,
+          refreshToken,
+          expiresIn: '24h'
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Google login error:', error);
+    return res.status(500).json({
       success: false,
       message: 'Internal server error'
     });
@@ -120,6 +252,20 @@ const refreshToken = async (req, res) => {
         success: false,
         message: 'User not found or inactive'
       });
+    }
+
+    const now = new Date();
+    const lastActivityAt = user.last_activity_at ? new Date(user.last_activity_at) : null;
+    if (lastActivityAt && Number.isFinite(lastActivityAt.getTime())) {
+      const idleSeconds = Math.floor((now.getTime() - lastActivityAt.getTime()) / 1000);
+      if (idleSeconds > SESSION_TIMEOUT_SECONDS) {
+        await update('refresh_tokens', { is_revoked: true }, { user_id: user.id });
+        return res.status(401).json({
+          success: false,
+          code: 'SESSION_TIMEOUT',
+          message: 'Session expired due to inactivity. Please log in again.'
+        });
+      }
     }
 
     // Check if refresh token exists and is not revoked
@@ -177,6 +323,8 @@ const refreshToken = async (req, res) => {
       token_hash: refreshTokenHash,
       expires_at: expiresAt
     });
+
+    await update('users', { last_activity_at: now }, { id: user.id });
 
     await logAuditEvent(user.id, 'TOKEN_REFRESH', 'USER', user.id, null, {
       refresh_time: new Date()
@@ -263,6 +411,7 @@ const getProfile = async (req, res) => {
         role: user.role,
         department: user.department,
         status: user.status,
+        must_change_password: Boolean(user.must_change_password),
         created_at: user.created_at,
         updated_at: user.updated_at
       }
@@ -344,8 +493,12 @@ const changePassword = async (req, res) => {
     // Hash new password
     const newPasswordHash = bcrypt.hashSync(newPassword, 10);
 
-    // Update password
-    await update('users', { password_hash: newPasswordHash }, { id: req.user.id });
+    // Update password and clear first-login/reset requirement
+    await update('users', {
+      password_hash: newPasswordHash,
+      must_change_password: false,
+      password_changed_at: new Date()
+    }, { id: req.user.id });
 
     // Revoke all refresh tokens (force re-login)
     await update('refresh_tokens', { is_revoked: true }, { user_id: req.user.id });
@@ -369,6 +522,7 @@ const changePassword = async (req, res) => {
 
 module.exports = {
   login,
+  googleLogin,
   refreshToken,
   logout,
   getProfile,

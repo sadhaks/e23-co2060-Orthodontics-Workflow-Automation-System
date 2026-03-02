@@ -8,11 +8,33 @@ const {
 } = require('../config/database');
 const { logAuditEvent } = require('../middleware/errorHandler');
 
+const normalizePlanFields = (data = {}) => {
+  const normalized = { ...data };
+
+  ['plan_procedure', 'outcome_notes'].forEach((field) => {
+    if (normalized[field] !== undefined && normalized[field] !== null && String(normalized[field]).trim() === '') {
+      normalized[field] = null;
+    }
+  });
+
+  ['planned_for', 'executed_at'].forEach((field) => {
+    if (normalized[field] !== undefined && normalized[field] !== null && String(normalized[field]).trim() === '') {
+      normalized[field] = null;
+    }
+  });
+
+  if (normalized.execution_status !== undefined && normalized.execution_status !== null && String(normalized.execution_status).trim() === '') {
+    normalized.execution_status = null;
+  }
+
+  return normalized;
+};
+
 // Get clinical notes for a patient
 const getPatientNotes = async (req, res) => {
   try {
     const { patientId } = req.params;
-    const { page = 1, limit = 10, note_type, verified } = req.query;
+    const { page = 1, limit = 10, note_type, verified, deleted = 'active' } = req.query;
     const offset = (page - 1) * limit;
 
     // Check if patient exists
@@ -24,26 +46,42 @@ const getPatientNotes = async (req, res) => {
       });
     }
 
-    let whereClause = 'WHERE patient_id = ?';
+    const deletedMode = String(deleted || 'active').toLowerCase();
+    if ((deletedMode === 'trashed' || deletedMode === 'all') && req.user.role !== 'ORTHODONTIST') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only assigned orthodontist can access notes bin'
+      });
+    }
+
+    let whereClause = 'WHERE cn.patient_id = ?';
     let queryParams = [patientId];
 
+    if (deletedMode === 'trashed') {
+      whereClause += ' AND cn.deleted_at IS NOT NULL';
+    } else if (deletedMode === 'all') {
+      // no deleted filter
+    } else {
+      whereClause += ' AND cn.deleted_at IS NULL';
+    }
+
     if (note_type) {
-      whereClause += ' AND note_type = ?';
+      whereClause += ' AND cn.note_type = ?';
       queryParams.push(note_type);
     }
 
     if (verified !== undefined) {
       if (verified === 'true') {
-        whereClause += ' AND is_verified = TRUE';
+        whereClause += ' AND cn.is_verified = TRUE';
       } else if (verified === 'false') {
-        whereClause += ' AND is_verified = FALSE';
+        whereClause += ' AND cn.is_verified = FALSE';
       }
     }
 
     // Get total count
     const countQuery = `
       SELECT COUNT(*) as total 
-      FROM clinical_notes 
+      FROM clinical_notes cn
       ${whereClause}
     `;
     const totalResult = await query(countQuery, queryParams);
@@ -56,10 +94,12 @@ const getPatientNotes = async (req, res) => {
         author.name as author_name,
         author.role as author_role,
         verifier.name as verifier_name,
-        verifier.role as verifier_role
+        verifier.role as verifier_role,
+        deleter.name as deleted_by_name
       FROM clinical_notes cn
       LEFT JOIN users author ON cn.author_id = author.id
       LEFT JOIN users verifier ON cn.verified_by = verifier.id
+      LEFT JOIN users deleter ON cn.deleted_by = deleter.id
       ${whereClause}
       ORDER BY cn.created_at DESC
       LIMIT ? OFFSET ?
@@ -108,6 +148,7 @@ const getNoteById = async (req, res) => {
       LEFT JOIN users author ON cn.author_id = author.id
       LEFT JOIN users verifier ON cn.verified_by = verifier.id
       WHERE cn.id = ?
+        AND cn.deleted_at IS NULL
     `;
 
     const notes = await query(noteQuery, [id]);
@@ -136,7 +177,7 @@ const getNoteById = async (req, res) => {
 const createClinicalNote = async (req, res) => {
   try {
     const { patientId } = req.params;
-    const noteData = { ...req.body, patient_id: patientId, author_id: req.user.id };
+    const noteData = normalizePlanFields({ ...req.body, patient_id: patientId, author_id: req.user.id });
 
     // Check if patient exists
     const patient = await findOne('patients', { id: patientId, deleted_at: null });
@@ -148,19 +189,11 @@ const createClinicalNote = async (req, res) => {
     }
 
     // Validate note type
-    const validTypes = ['TREATMENT', 'OBSERVATION', 'PROGRESS', 'SUPERVISOR_REVIEW'];
+    const validTypes = ['TREATMENT', 'OBSERVATION', 'PROGRESS', 'SUPERVISOR_REVIEW', 'DIAGNOSIS'];
     if (noteData.note_type && !validTypes.includes(noteData.note_type)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid note type'
-      });
-    }
-
-    // Students can only create certain types of notes
-    if (req.user.role === 'STUDENT' && ['SUPERVISOR_REVIEW'].includes(noteData.note_type)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Students cannot create supervisor review notes'
       });
     }
 
@@ -206,30 +239,14 @@ const createClinicalNote = async (req, res) => {
 const updateClinicalNote = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const updateData = normalizePlanFields(req.body);
 
     // Check if note exists
-    const existingNote = await findOne('clinical_notes', { id });
+    const existingNote = await findOne('clinical_notes', { id, deleted_at: null });
     if (!existingNote) {
       return res.status(404).json({
         success: false,
         message: 'Clinical note not found'
-      });
-    }
-
-    // Check permissions
-    if (req.user.role === 'STUDENT' && existingNote.author_id !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        message: 'You can only edit your own notes'
-      });
-    }
-
-    // Students cannot verify notes
-    if (req.user.role === 'STUDENT' && updateData.is_verified) {
-      return res.status(403).json({
-        success: false,
-        message: 'Students cannot verify notes'
       });
     }
 
@@ -286,9 +303,10 @@ const updateClinicalNote = async (req, res) => {
 const deleteClinicalNote = async (req, res) => {
   try {
     const { id } = req.params;
+    const permanent = String(req.query.permanent || '').toLowerCase() === 'true';
 
-    // Check if note exists
-    const existingNote = await findOne('clinical_notes', { id });
+    const rows = await query('SELECT * FROM clinical_notes WHERE id = ? LIMIT 1', [id]);
+    const existingNote = rows[0];
     if (!existingNote) {
       return res.status(404).json({
         success: false,
@@ -296,33 +314,93 @@ const deleteClinicalNote = async (req, res) => {
       });
     }
 
-    // Check permissions
-    if (req.user.role === 'STUDENT' && existingNote.author_id !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        message: 'You can only delete your own notes'
+    if (permanent) {
+      if (!existingNote.deleted_at) {
+        return res.status(400).json({
+          success: false,
+          message: 'Note must be moved to bin before permanent deletion'
+        });
+      }
+
+      await remove('clinical_notes', { id }, false);
+
+      await logAuditEvent(req.user.id, 'HARD_DELETE', 'CLINICAL_NOTE', id, existingNote, null);
+
+      return res.json({
+        success: true,
+        message: 'Clinical note permanently deleted'
       });
     }
 
-    // Cannot delete verified notes (except for admins and orthodontists)
-    if (existingNote.is_verified && !['ADMIN', 'ORTHODONTIST'].includes(req.user.role)) {
+    // Cannot delete verified notes (except for orthodontists)
+    if (existingNote.is_verified && req.user.role !== 'ORTHODONTIST') {
       return res.status(403).json({
         success: false,
         message: 'Cannot delete verified notes'
       });
     }
 
-    // Delete note
-    await remove('clinical_notes', { id }, false);
+    if (existingNote.deleted_at) {
+      return res.status(400).json({
+        success: false,
+        message: 'Clinical note already in bin'
+      });
+    }
 
-    await logAuditEvent(req.user.id, 'DELETE', 'CLINICAL_NOTE', id, existingNote, null);
+    await update('clinical_notes', { deleted_at: new Date(), deleted_by: req.user.id }, { id });
+
+    await logAuditEvent(req.user.id, 'DELETE', 'CLINICAL_NOTE', id, existingNote, {
+      deleted_at: new Date(),
+      deleted_by: req.user.id
+    });
 
     res.json({
       success: true,
-      message: 'Clinical note deleted successfully'
+      message: 'Clinical note moved to bin'
     });
   } catch (error) {
     console.error('Delete clinical note error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Restore clinical note from bin
+const restoreClinicalNote = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const rows = await query('SELECT * FROM clinical_notes WHERE id = ? LIMIT 1', [id]);
+    const existingNote = rows[0];
+    if (!existingNote) {
+      return res.status(404).json({
+        success: false,
+        message: 'Clinical note not found'
+      });
+    }
+
+    if (!existingNote.deleted_at) {
+      return res.status(400).json({
+        success: false,
+        message: 'Clinical note is not in bin'
+      });
+    }
+
+    await update('clinical_notes', { deleted_at: null, deleted_by: null }, { id });
+
+    await logAuditEvent(req.user.id, 'RESTORE', 'CLINICAL_NOTE', id, existingNote, {
+      deleted_at: null,
+      deleted_by: null
+    });
+
+    res.json({
+      success: true,
+      message: 'Clinical note restored successfully'
+    });
+  } catch (error) {
+    console.error('Restore clinical note error:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -345,7 +423,7 @@ const verifyNote = async (req, res) => {
     }
 
     // Check if note exists
-    const existingNote = await findOne('clinical_notes', { id });
+    const existingNote = await findOne('clinical_notes', { id, deleted_at: null });
     if (!existingNote) {
       return res.status(404).json({
         success: false,
@@ -427,6 +505,7 @@ const getPendingVerification = async (req, res) => {
       SELECT COUNT(*) as total 
       FROM clinical_notes 
       WHERE is_verified = FALSE
+        AND deleted_at IS NULL
     `;
     const totalResult = await query(countQuery);
     const total = totalResult[0].total;
@@ -443,6 +522,7 @@ const getPendingVerification = async (req, res) => {
       LEFT JOIN patients p ON cn.patient_id = p.id
       LEFT JOIN users author ON cn.author_id = author.id
       WHERE cn.is_verified = FALSE
+        AND cn.deleted_at IS NULL
       ORDER BY cn.created_at ASC
       LIMIT ? OFFSET ?
     `;
@@ -498,9 +578,11 @@ const getNoteStats = async (req, res) => {
         COUNT(CASE WHEN note_type = 'TREATMENT' THEN 1 END) as treatment_notes,
         COUNT(CASE WHEN note_type = 'OBSERVATION' THEN 1 END) as observation_notes,
         COUNT(CASE WHEN note_type = 'PROGRESS' THEN 1 END) as progress_notes,
-        COUNT(CASE WHEN note_type = 'SUPERVISOR_REVIEW' THEN 1 END) as supervisor_notes
+        COUNT(CASE WHEN note_type = 'SUPERVISOR_REVIEW' THEN 1 END) as supervisor_notes,
+        COUNT(CASE WHEN note_type = 'DIAGNOSIS' THEN 1 END) as diagnosis_notes
       FROM clinical_notes 
       WHERE created_at >= ${dateFilter}
+        AND deleted_at IS NULL
     `;
 
     const stats = await query(statsQuery);
@@ -513,6 +595,7 @@ const getNoteStats = async (req, res) => {
         COUNT(CASE WHEN is_verified = TRUE THEN 1 END) as verified_count
       FROM clinical_notes 
       WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        AND deleted_at IS NULL
       GROUP BY DATE(created_at)
       ORDER BY date ASC
     `;
@@ -529,6 +612,7 @@ const getNoteStats = async (req, res) => {
       FROM clinical_notes cn
       LEFT JOIN users u ON cn.author_id = u.id
       WHERE cn.created_at >= ${dateFilter}
+        AND cn.deleted_at IS NULL
       GROUP BY cn.author_id, u.name, u.role
       ORDER BY note_count DESC
       LIMIT 10
@@ -559,6 +643,7 @@ module.exports = {
   createClinicalNote,
   updateClinicalNote,
   deleteClinicalNote,
+  restoreClinicalNote,
   verifyNote,
   getPendingVerification,
   getNoteStats

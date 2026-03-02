@@ -1,5 +1,13 @@
 const { verifyAccessToken, extractTokenFromHeader } = require('../config/auth');
-const { findOne } = require('../config/database');
+const { findOne, update } = require('../config/database');
+
+const SESSION_TIMEOUT_SECONDS = Number(process.env.SESSION_TIMEOUT_SECONDS || 3600);
+
+const PASSWORD_CHANGE_ALLOWED_PATHS = new Set([
+  '/api/auth/change-password',
+  '/api/auth/logout',
+  '/api/auth/profile'
+]);
 
 // Authentication middleware
 const authenticate = async (req, res, next) => {
@@ -26,14 +34,40 @@ const authenticate = async (req, res, next) => {
       });
     }
 
+    const now = new Date();
+    const lastActivityAt = user.last_activity_at ? new Date(user.last_activity_at) : null;
+    if (lastActivityAt && Number.isFinite(lastActivityAt.getTime())) {
+      const idleSeconds = Math.floor((now.getTime() - lastActivityAt.getTime()) / 1000);
+      if (idleSeconds > SESSION_TIMEOUT_SECONDS) {
+        await update('refresh_tokens', { is_revoked: true }, { user_id: user.id });
+        return res.status(401).json({
+          success: false,
+          code: 'SESSION_TIMEOUT',
+          message: 'Session expired due to inactivity. Please log in again.'
+        });
+      }
+    }
+
+    await update('users', { last_activity_at: now }, { id: user.id });
+
     // Attach user to request object
     req.user = {
       id: user.id,
       name: user.name,
       email: user.email,
       role: user.role,
-      department: user.department
+      department: user.department,
+      must_change_password: Boolean(user.must_change_password)
     };
+
+    const requestPath = String(req.originalUrl || '').split('?')[0];
+    if (req.user.must_change_password && !PASSWORD_CHANGE_ALLOWED_PATHS.has(requestPath)) {
+      return res.status(403).json({
+        success: false,
+        code: 'PASSWORD_CHANGE_REQUIRED',
+        message: 'Password change required before continuing'
+      });
+    }
 
     next();
   } catch (error) {

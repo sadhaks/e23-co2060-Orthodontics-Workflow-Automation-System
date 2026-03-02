@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, Button, Badge } from './UI';
-import { Upload, File, Image as ImageIcon, FileText, Download, RefreshCw, Trash2, RotateCcw } from 'lucide-react';
+import { Upload, File, Image as ImageIcon, FileText, Download, RefreshCw, Trash2, RotateCcw, Loader2 } from 'lucide-react';
 import { apiService } from '../services/api';
 import { toast } from 'sonner';
 
@@ -21,6 +21,9 @@ type Props = {
   canUpload: boolean;
   canDelete: boolean;
 };
+
+const MAX_FILES_PER_BATCH = 10;
+const MAX_BATCH_SIZE_BYTES = 100 * 1024 * 1024;
 
 const getDocType = (file: File): PatientDocument['type'] => {
   if (file.type.startsWith('image/')) {
@@ -44,6 +47,7 @@ export function DocumentPortal({ patientId, canUpload, canDelete }: Props) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [documents, setDocuments] = useState<PatientDocument[]>([]);
+  const [downloadingDocId, setDownloadingDocId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'active' | 'trashed'>('active');
   const [trashCount, setTrashCount] = useState(0);
 
@@ -92,19 +96,39 @@ export function DocumentPortal({ patientId, canUpload, canDelete }: Props) {
     }
 
     if (!files.length) return;
+    if (files.length > MAX_FILES_PER_BATCH) {
+      toast.error(`You can upload up to ${MAX_FILES_PER_BATCH} files at a time`);
+      return;
+    }
+    const batchSize = files.reduce((sum, file) => sum + file.size, 0);
+    if (batchSize > MAX_BATCH_SIZE_BYTES) {
+      toast.error('Total selected file size exceeds 100 MB limit');
+      return;
+    }
+
     setUploading(true);
     setUploadProgress(0);
     try {
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        await apiService.documents.upload(patientId, file, {
-          type: getDocType(file),
-          description: `Uploaded via patient document portal: ${file.name}`,
-        }, (percent) => {
-          const overall = Math.round(((index + percent / 100) / files.length) * 100);
-          setUploadProgress(Math.min(100, Math.max(0, overall)));
-        });
-      }
+      const perFileProgress = new Array(files.length).fill(0);
+      await Promise.all(
+        files.map((file, index) =>
+          apiService.documents.upload(
+            patientId,
+            file,
+            {
+              type: getDocType(file),
+              description: `Uploaded via patient document portal: ${file.name}`,
+            },
+            (percent) => {
+              perFileProgress[index] = Math.min(100, Math.max(0, percent));
+              const overall = Math.round(
+                perFileProgress.reduce((sum, value) => sum + value, 0) / files.length
+              );
+              setUploadProgress(Math.min(100, Math.max(0, overall)));
+            }
+          )
+        )
+      );
       toast.success(`${files.length} document(s) uploaded successfully`);
       await loadDocuments();
     } catch (error: any) {
@@ -129,11 +153,14 @@ export function DocumentPortal({ patientId, canUpload, canDelete }: Props) {
   };
 
   const onDownload = async (id: number) => {
+    setDownloadingDocId(id);
     try {
       await apiService.documents.download(String(id));
       toast.success('Download started');
     } catch (error: any) {
       toast.error(error?.message || 'Failed to download document');
+    } finally {
+      setDownloadingDocId(null);
     }
   };
 
@@ -167,8 +194,6 @@ export function DocumentPortal({ patientId, canUpload, canDelete }: Props) {
   const summary = useMemo(() => {
     return {
       total: documents.length,
-      radiographs: documents.filter((d) => d.type === 'RADIOGRAPH').length,
-      notes: documents.filter((d) => d.type === 'NOTE').length,
     };
   }, [documents]);
 
@@ -193,7 +218,7 @@ export function DocumentPortal({ patientId, canUpload, canDelete }: Props) {
           <Upload className="w-10 h-10 mx-auto text-slate-500 mb-3" />
           <h3 className="text-lg font-bold text-slate-900">Patient Documents</h3>
           <p className="text-sm text-slate-500 mt-2">
-            Drag and drop files, or click to upload. Documents are stored per patient and available for download later.
+            Drag and drop files, or click to upload. Up to 10 files per batch (max 100MB total).
           </p>
           <div className="mt-4 flex justify-center gap-2">
             <Badge variant="blue">Any File Type</Badge>
@@ -279,9 +304,23 @@ export function DocumentPortal({ patientId, canUpload, canDelete }: Props) {
                 </div>
                 <div className="flex items-center gap-2">
                   {viewMode === 'active' && (
-                    <Button variant="secondary" size="sm" onClick={() => onDownload(doc.id)}>
-                      <Download className="w-4 h-4 mr-1" />
-                      Download
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => onDownload(doc.id)}
+                      disabled={downloadingDocId === doc.id}
+                    >
+                      {downloadingDocId === doc.id ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                          Preparing...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-4 h-4 mr-1" />
+                          Download
+                        </>
+                      )}
                     </Button>
                   )}
                   {canDelete && viewMode === 'active' && (
@@ -319,8 +358,6 @@ export function DocumentPortal({ patientId, canUpload, canDelete }: Props) {
           <h4 className="text-xs font-bold text-slate-500 uppercase mb-4">Summary</h4>
           <div className="space-y-2 text-sm text-slate-700">
             <p>Total documents: <span className="font-bold">{summary.total}</span></p>
-            <p>Radiographs: <span className="font-bold">{summary.radiographs}</span></p>
-            <p>Notes: <span className="font-bold">{summary.notes}</span></p>
           </div>
         </Card>
       </div>

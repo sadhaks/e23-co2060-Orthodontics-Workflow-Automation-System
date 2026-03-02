@@ -9,12 +9,14 @@ interface User {
   email: string;
   role: UserRole;
   department: string;
+  must_change_password?: boolean;
 }
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string; requiresPasswordChange?: boolean }>;
+  loginWithGoogle: (idToken: string) => Promise<{ success: boolean; error?: string; requiresPasswordChange?: boolean }>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -53,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initializeAuth();
   }, []);
 
-  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string; requiresPasswordChange?: boolean }> => {
     try {
       const response = await apiService.auth.login({ email, password });
       
@@ -63,12 +65,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           ...response.data.user,
           role: response.data.user.role as UserRole
         });
-        return { success: true };
+        return {
+          success: true,
+          requiresPasswordChange: Boolean(response.data.user.must_change_password)
+        };
       } else {
         return { success: false, error: response.message || 'Login failed' };
       }
     } catch (error: any) {
       return { success: false, error: error.message || 'Login failed' };
+    }
+  };
+
+  const loginWithGoogle = async (idToken: string): Promise<{ success: boolean; error?: string; requiresPasswordChange?: boolean }> => {
+    try {
+      const response = await apiService.auth.loginWithGoogle(idToken);
+
+      if (response.success && response.data) {
+        setUser({
+          ...response.data.user,
+          role: response.data.user.role as UserRole
+        });
+        return {
+          success: true,
+          requiresPasswordChange: Boolean(response.data.user.must_change_password)
+        };
+      }
+      return { success: false, error: response.message || 'Google login failed' };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Google login failed' };
     }
   };
 
@@ -97,7 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout, refreshProfile }}>
+    <AuthContext.Provider value={{ user, isLoading, login, loginWithGoogle, logout, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

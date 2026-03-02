@@ -32,7 +32,7 @@ router.get('/orthodontists',
 
 // GET /api/patients/assignable-staff - Get assignable staff for patient care team
 router.get('/assignable-staff',
-  authorizeRoles('RECEPTION', 'NURSE', 'ORTHODONTIST'),
+  authorizeRoles('RECEPTION', 'ORTHODONTIST'),
   asyncHandler(patientController.getAssignableStaff)
 );
 
@@ -76,7 +76,7 @@ router.get('/:id/assignments',
 
 // POST /api/patients/:id/assignments - Assign care-team member to patient
 router.post('/:id/assignments',
-  authorizeRoles('RECEPTION', 'NURSE', 'ORTHODONTIST'),
+  authorizeRoles('RECEPTION', 'ORTHODONTIST'),
   validate(schemas.assignPatientMember),
   asyncHandler(patientController.assignPatientMember)
 );
@@ -110,6 +110,54 @@ router.put('/:id/dental-chart/:toothNumber',
 router.delete('/:id/dental-chart/:toothNumber',
   requirePermission(OBJECT_TYPES.PATIENT_MEDICAL, PERMISSIONS.UPDATE, { patientIdParam: 'id' }),
   asyncHandler(patientController.deleteDentalChartEntry)
+);
+
+// GET /api/patients/:id/dental-chart/custom - Get custom dental chart for a patient
+router.get('/:id/dental-chart/custom',
+  requirePermission(OBJECT_TYPES.PATIENT_MEDICAL, PERMISSIONS.READ, { patientIdParam: 'id' }),
+  asyncHandler(patientController.getDentalChartCustom)
+);
+
+// PUT /api/patients/:id/dental-chart/custom/:toothCode - Upsert a custom tooth chart entry
+router.put('/:id/dental-chart/custom/:toothCode',
+  requirePermission(OBJECT_TYPES.PATIENT_MEDICAL, PERMISSIONS.UPDATE, { patientIdParam: 'id' }),
+  asyncHandler(patientController.upsertDentalChartCustomEntry)
+);
+
+// DELETE /api/patients/:id/dental-chart/custom/:toothCode - Remove a custom tooth chart entry
+router.delete('/:id/dental-chart/custom/:toothCode',
+  requirePermission(OBJECT_TYPES.PATIENT_MEDICAL, PERMISSIONS.UPDATE, { patientIdParam: 'id' }),
+  asyncHandler(patientController.deleteDentalChartCustomEntry)
+);
+
+// GET /api/patients/:id/dental-chart/versions - List saved annotated dental chart versions
+router.get('/:id/dental-chart/versions',
+  requirePermission(OBJECT_TYPES.PATIENT_MEDICAL, PERMISSIONS.READ, { patientIdParam: 'id' }),
+  asyncHandler(patientController.listDentalChartVersions)
+);
+
+// POST /api/patients/:id/dental-chart/versions - Save current annotated chart as immutable version
+router.post('/:id/dental-chart/versions',
+  requirePermission(OBJECT_TYPES.PATIENT_MEDICAL, PERMISSIONS.UPDATE, { patientIdParam: 'id' }),
+  asyncHandler(patientController.createDentalChartVersion)
+);
+
+// GET /api/patients/:id/dental-chart/versions/:versionId/download - Download chart version as file
+router.get('/:id/dental-chart/versions/:versionId/download',
+  requirePermission(OBJECT_TYPES.PATIENT_MEDICAL, PERMISSIONS.READ, { patientIdParam: 'id' }),
+  asyncHandler(patientController.downloadDentalChartVersion)
+);
+
+// DELETE /api/patients/:id/dental-chart/versions/:versionId - Move version to bin or permanently delete
+router.delete('/:id/dental-chart/versions/:versionId',
+  authorizeRoles('ORTHODONTIST'),
+  asyncHandler(patientController.deleteDentalChartVersion)
+);
+
+// PUT /api/patients/:id/dental-chart/versions/:versionId/restore - Restore version from bin
+router.put('/:id/dental-chart/versions/:versionId/restore',
+  authorizeRoles('ORTHODONTIST'),
+  asyncHandler(patientController.restoreDentalChartVersion)
 );
 
 module.exports = router;
