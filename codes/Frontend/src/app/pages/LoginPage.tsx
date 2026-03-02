@@ -20,6 +20,7 @@ export function LoginPage() {
   const { login, loginWithGoogle, isLoading: authLoading, user } = useAuth();
   const navigate = useNavigate();
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
+  const toothLogoRef = useRef<HTMLDivElement | null>(null);
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 
   if (!authLoading && user) {
@@ -49,6 +50,26 @@ export function LoginPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const playToothSwing = () => {
+    const el = toothLogoRef.current;
+    if (!el || typeof el.animate !== 'function') return;
+    el.animate(
+      [
+        { transform: 'translateY(0) rotate(0deg)' },
+        { transform: 'translateY(-2px) rotate(-16deg)' },
+        { transform: 'translateY(-1px) rotate(12deg)' },
+        { transform: 'translateY(-1px) rotate(-8deg)' },
+        { transform: 'translateY(0) rotate(5deg)' },
+        { transform: 'translateY(0) rotate(-2deg)' },
+        { transform: 'translateY(0) rotate(0deg)' }
+      ],
+      {
+        duration: 860,
+        easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)'
+      }
+    );
   };
 
   useEffect(() => {
@@ -201,36 +222,16 @@ export function LoginPage() {
     <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden">
       {/* Background Layer */}
       <div className="absolute inset-0 z-0">
-        <div className="absolute inset-0 bg-[radial-gradient(120%_90%_at_10%_0%,#153a7d_0%,#0a234f_34%,#061732_75%,#041024_100%)]" />
-        <div className="absolute inset-0 bg-[linear-gradient(125deg,rgba(19,79,176,0.24)_0%,rgba(10,35,79,0.08)_34%,rgba(4,16,36,0.58)_100%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(155%_105%_at_15%_0%,#fbfdff_0%,#e6f1ff_32%,#c7ddff_76%,#d1d3ff_100%)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(76,160,255,0.3)_0%,rgba(76,160,255,0.12)_45%,rgba(95,118,238,0.3)_100%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(52%_42%_at_50%_46%,rgba(86,170,255,0.56)_0%,rgba(86,170,255,0.3)_48%,rgba(86,170,255,0)_80%)]" />
 
-        <div
-          className="absolute inset-0 opacity-25"
-          style={{
-            backgroundImage:
-              'linear-gradient(to right, rgba(120,170,255,0.12) 1px, transparent 1px), linear-gradient(to bottom, rgba(120,170,255,0.10) 1px, transparent 1px)',
-            backgroundSize: '56px 56px'
-          }}
-        />
+        <div className="absolute -top-28 -left-24 w-[36rem] h-[36rem] rounded-full bg-white/55 blur-[110px]" />
+        <div className="absolute -top-24 -left-16 w-[28rem] h-[28rem] rounded-full bg-violet-200/36 blur-[100px]" />
+        <div className="absolute top-[-5%] right-[-10%] w-[34rem] h-[34rem] rounded-full bg-blue-300/72 blur-[120px]" />
+        <div className="absolute bottom-[-14%] left-[24%] w-[40rem] h-[24rem] rounded-full bg-cyan-200/64 blur-[110px]" />
+        <div className="absolute bottom-[8%] right-[8%] w-[24rem] h-[24rem] rounded-full bg-violet-200/44 blur-[100px]" />
 
-        <div className="absolute -top-16 -left-10 w-[36rem] h-[36rem] rounded-full bg-blue-400/20 blur-3xl" />
-        <div className="absolute top-1/3 -right-16 w-[30rem] h-[30rem] rounded-full bg-cyan-300/15 blur-3xl" />
-        <div className="absolute -bottom-24 left-1/4 w-[34rem] h-[22rem] rounded-full bg-blue-500/18 blur-3xl" />
-
-        <svg className="absolute inset-0 w-full h-full opacity-55" viewBox="0 0 1440 1024" preserveAspectRatio="none" aria-hidden="true">
-          <defs>
-            <linearGradient id="waveStroke" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#58b7ff" stopOpacity="0.12" />
-              <stop offset="45%" stopColor="#63d0ff" stopOpacity="0.5" />
-              <stop offset="100%" stopColor="#3f8fff" stopOpacity="0.14" />
-            </linearGradient>
-          </defs>
-          <path d="M0,800 C220,720 380,880 620,790 C860,700 990,865 1240,760 C1320,726 1380,718 1440,724" stroke="url(#waveStroke)" strokeWidth="2.2" fill="none" />
-          <path d="M0,850 C220,770 390,930 640,835 C880,742 1030,908 1260,818 C1330,790 1388,782 1440,788" stroke="url(#waveStroke)" strokeWidth="1.5" fill="none" />
-          <path d="M0,908 C220,836 398,974 650,888 C900,804 1060,958 1290,882 C1344,864 1396,858 1440,864" stroke="url(#waveStroke)" strokeWidth="1.1" fill="none" />
-        </svg>
-
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-900/10 via-transparent to-black/30" />
       </div>
 
       {/* Centered Login Portal Card */}
@@ -239,7 +240,12 @@ export function LoginPage() {
         <div className="text-center mb-8">
           {/* Tooth Logo - Centered in Card */}
           <div className="flex justify-center mb-6">
-            <div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center text-white shadow-xl transform hover:rotate-3 transition-transform duration-300">
+            <div
+              ref={toothLogoRef}
+              className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center text-white shadow-xl cursor-pointer transform-gpu transition-transform duration-300 hover:-translate-y-1.5 hover:scale-[1.06] active:scale-[0.97]"
+              onClick={playToothSwing}
+              title="Click to swing"
+            >
               <ToothLogo className="w-14 h-14" />
             </div>
           </div>
