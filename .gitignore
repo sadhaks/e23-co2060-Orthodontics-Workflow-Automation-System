@@ -1,0 +1,68 @@
+# macOS and Windows filesystem noise
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+
+# Editor and IDE files
+.idea/
+.vscode/
+.vscode-test/
+*.swp
+*.swo
+*~
+
+# Dependency directories
+node_modules/
+.npm/
+.yarn/
+
+# Build and coverage output
+dist/
+build/
+coverage/
+.nyc_output/
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+.vuepress/dist/
+.serverless/
+
+# Logs and runtime files
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.pid
+*.pid.lock
+*.seed
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Database and local runtime data
+*.sqlite
+*.db
+*.db-journal
+
+# Temporary directories
+tmp/
+temp/
+
+# Backend uploads: keep only the placeholder
+codes/Backend/src/uploads/*
+!codes/Backend/src/uploads/.gitkeep
+
+# Docs site build artifacts
+docs/_site/
+docs/.jekyll-metadata
+docs/Gemfile
+docs/Gemfile.lock
