@@ -219,6 +219,54 @@ const schemas = {
     outcome_notes: Joi.string().max(5000).allow('').optional()
   }).min(1),
 
+  createPaymentRecord: Joi.object({
+    payment_date: Joi.date().required().messages({
+      'any.required': 'payment_date is required'
+    }),
+    amount: Joi.number().positive().precision(2).required().messages({
+      'number.positive': 'amount must be greater than zero',
+      'any.required': 'amount is required'
+    }),
+    currency: Joi.string().trim().uppercase().length(3).optional().default('LKR'),
+    payment_method: Joi.string().valid('CASH', 'CARD', 'BANK_TRANSFER', 'ONLINE', 'CHEQUE', 'OTHER').required().messages({
+      'any.required': 'payment_method is required'
+    }),
+    status: Joi.string().valid('PENDING', 'PAID', 'PARTIAL', 'REFUNDED', 'VOID').optional().default('PAID'),
+    reference_number: Joi.string().max(255).allow('').optional(),
+    notes: Joi.string().max(5000).allow('').optional()
+  }),
+
+  updatePaymentRecord: Joi.object({
+    payment_date: Joi.date().optional(),
+    amount: Joi.number().positive().precision(2).optional(),
+    currency: Joi.string().trim().uppercase().length(3).optional(),
+    payment_method: Joi.string().valid('CASH', 'CARD', 'BANK_TRANSFER', 'ONLINE', 'CHEQUE', 'OTHER').optional(),
+    status: Joi.string().valid('PENDING', 'PAID', 'PARTIAL', 'REFUNDED', 'VOID').optional(),
+    reference_number: Joi.string().max(255).allow('').optional(),
+    notes: Joi.string().max(5000).allow('').optional()
+  }).min(1),
+
+  createPatientMaterialUsage: Joi.object({
+    inventory_item_id: Joi.number().integer().positive().required().messages({
+      'any.required': 'inventory_item_id is required'
+    }),
+    quantity: Joi.number().integer().min(1).required().messages({
+      'number.min': 'quantity must be at least 1',
+      'any.required': 'quantity is required'
+    }),
+    used_at: Joi.date().optional(),
+    purpose: Joi.string().max(255).allow('').optional(),
+    notes: Joi.string().max(5000).allow('').optional()
+  }),
+
+  updatePatientMaterialUsage: Joi.object({
+    inventory_item_id: Joi.number().integer().positive().optional(),
+    quantity: Joi.number().integer().min(1).optional(),
+    used_at: Joi.date().optional(),
+    purpose: Joi.string().max(255).allow('').optional(),
+    notes: Joi.string().max(5000).allow('').optional()
+  }).min(1),
+
   // Queue schemas
   createQueue: Joi.object({
     patient_id: Joi.number().integer().positive().required().messages({

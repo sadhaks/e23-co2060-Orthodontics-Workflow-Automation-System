@@ -633,6 +633,19 @@ export const apiService = {
       }
     ) =>
       apiClient.post(API_ENDPOINTS.PATIENTS.CLINICAL_NOTES(patientId), data),
+
+    update: (
+      id: string,
+      data: Partial<{
+        content: string;
+        note_type: string;
+        plan_procedure: string;
+        planned_for: string;
+        executed_at: string;
+        execution_status: string;
+        outcome_notes: string;
+      }>
+    ) => apiClient.put(API_ENDPOINTS.CLINICAL_NOTES.UPDATE(id), data),
     
     verify: (id: string, data: { verification_notes?: string }) =>
       apiClient.post(API_ENDPOINTS.CLINICAL_NOTES.VERIFY(id), data),
@@ -642,6 +655,90 @@ export const apiService = {
 
     restore: (id: string) =>
       apiClient.put(`/api/clinical-notes/${id}/restore`),
+  },
+
+  paymentRecords: {
+    getPatientRecords: (patientId: string, params?: { page?: number; limit?: number; deleted?: 'active' | 'trashed' | 'all' }) => {
+      const query = new URLSearchParams();
+      if (params?.page) query.append('page', params.page.toString());
+      if (params?.limit) query.append('limit', params.limit.toString());
+      if (params?.deleted) query.append('deleted', params.deleted);
+
+      const queryString = query.toString();
+      return apiClient.get<PaginatedResponse<any>>(`${API_ENDPOINTS.PAYMENT_RECORDS.PATIENT_RECORDS(patientId)}${queryString ? `?${queryString}` : ''}`);
+    },
+
+    create: (
+      patientId: string,
+      data: {
+        payment_date: string;
+        amount: number;
+        currency?: string;
+        payment_method: string;
+        status?: string;
+        reference_number?: string;
+        notes?: string;
+      }
+    ) => apiClient.post(API_ENDPOINTS.PAYMENT_RECORDS.CREATE(patientId), data),
+
+    update: (
+      id: string,
+      data: Partial<{
+        payment_date: string;
+        amount: number;
+        currency: string;
+        payment_method: string;
+        status: string;
+        reference_number: string;
+        notes: string;
+      }>
+    ) => apiClient.put(API_ENDPOINTS.PAYMENT_RECORDS.UPDATE(id), data),
+
+    delete: (id: string, permanent = false) =>
+      apiClient.delete(`${API_ENDPOINTS.PAYMENT_RECORDS.DELETE(id)}${permanent ? '?permanent=true' : ''}`),
+
+    restore: (id: string) =>
+      apiClient.put(API_ENDPOINTS.PAYMENT_RECORDS.RESTORE(id)),
+  },
+
+  patientMaterials: {
+    getPatientRecords: (patientId: string, params?: { page?: number; limit?: number; deleted?: 'active' | 'trashed' | 'all' }) => {
+      const query = new URLSearchParams();
+      if (params?.page) query.append('page', String(params.page));
+      if (params?.limit) query.append('limit', String(params.limit));
+      if (params?.deleted) query.append('deleted', params.deleted);
+
+      const queryString = query.toString();
+      return apiClient.get<PaginatedResponse<any>>(`${API_ENDPOINTS.PATIENT_MATERIALS.PATIENT_RECORDS(patientId)}${queryString ? `?${queryString}` : ''}`);
+    },
+
+    create: (
+      patientId: string,
+      data: {
+        inventory_item_id: number;
+        quantity: number;
+        used_at?: string;
+        purpose?: string;
+        notes?: string;
+      }
+    ) => apiClient.post(API_ENDPOINTS.PATIENT_MATERIALS.CREATE(patientId), data),
+
+    update: (
+      id: string,
+      data: Partial<{
+        inventory_item_id: number;
+        quantity: number;
+        used_at: string;
+        purpose: string;
+        notes: string;
+      }>
+    ) => apiClient.put(API_ENDPOINTS.PATIENT_MATERIALS.UPDATE(id), data),
+
+    delete: (id: string, permanent = false) =>
+      apiClient.delete(`${API_ENDPOINTS.PATIENT_MATERIALS.DELETE(id)}${permanent ? '?permanent=true' : ''}`),
+
+    restore: (id: string) =>
+      apiClient.put(API_ENDPOINTS.PATIENT_MATERIALS.RESTORE(id)),
   },
 
   // Queue

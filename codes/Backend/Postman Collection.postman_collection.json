@@ -1,0 +1,1052 @@
+{
+	"info": {
+		"_postman_id": "orthoflow-api-collection",
+		"name": "OrthoFlow API Collection",
+		"description": "Complete API collection for OrthoFlow University Orthodontics Clinical Workflow Management System",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3000",
+			"type": "string"
+		},
+		{
+			"key": "accessToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refreshToken",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{accessToken}}",
+				"type": "string"
+			}
+		]
+	},
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Auto-refresh token if expired",
+					"if (pm.collectionVariables.get('refreshToken') && pm.request.headers.has('Authorization')) {",
+					"    const token = pm.collectionVariables.get('accessToken');",
+					"    if (token) {",
+					"        try {",
+					"            const payload = JSON.parse(atob(token.split('.')[1]));",
+					"            const now = Math.floor(Date.now() / 1000);",
+					"            if (payload.exp < now) {",
+					"                pm.sendRequest({",
+					"                    url: pm.collectionVariables.get('baseUrl') + '/api/auth/refresh',",
+					"                    method: 'POST',",
+					"                    header: 'Content-Type: application/json',",
+					"                    body: {",
+					"                        mode: 'raw',",
+					"                        raw: JSON.stringify({",
+					"                            refreshToken: pm.collectionVariables.get('refreshToken')",
+					"                        })",
+					"                    }",
+					"                }, function (err, res) {",
+					"                    if (res && res.code === 200) {",
+					"                        const response = res.json();",
+					"                        pm.collectionVariables.set('accessToken', response.data.tokens.accessToken);",
+					"                        pm.collectionVariables.set('refreshToken', response.data.tokens.refreshToken);",
+					"                        pm.request.headers.upsert({",
+					"                            key: 'Authorization',",
+					"                            value: 'Bearer ' + response.data.tokens.accessToken",
+					"                            type: 'text'",
+					"                        });",
+					"                    }",
+					"                });",
+					"            }",
+					"        } catch (e) {",
+					"            console.log('Token parsing failed');",
+					"        }",
+					"    }",
+					"}"
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Store tokens from login responses",
+					"if (pm.response.code === 200) {",
+					"    const response = pm.response.json();",
+					"    if (response.data && response.data.tokens) {",
+					"        pm.collectionVariables.set('accessToken', response.data.tokens.accessToken);",
+					"        pm.collectionVariables.set('refreshToken', response.data.tokens.refreshToken);",
+					"    }",
+					"}",
+					"",
+					"// Basic response tests",
+					"pm.test('Status code is successful', function () {",
+					"    pm.expect(pm.response.code).to.be.oneOf([200, 201, 204]);",
+					"});",
+					"",
+					"pm.test('Response has success field', function () {",
+					"    const response = pm.response.json();",
+					"    pm.expect(response).to.have.property('success');",
+					"});"
+				]
+			}
+		}
+	],
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.tokens) {",
+									"        pm.collectionVariables.set('accessToken', response.data.tokens.accessToken);",
+									"        pm.collectionVariables.set('refreshToken', response.data.tokens.refreshToken);",
+									"        console.log('Tokens stored successfully');",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"admin@orthoflow.edu\",\n  \"password\": \"admin123\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/login",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"login"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/profile",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"profile"
+							]
+						}
+					}
+				},
+				{
+					"name": "Refresh Token",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/refresh",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"refresh"
+							]
+						}
+					}
+				},
+				{
+					"name": "Logout",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/logout",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"logout"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Patients",
+			"item": [
+				{
+					"name": "Get All Patients",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/patients?page=1&limit=10",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Patient by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/patients/1",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients",
+								"1"
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Patient",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"patient_code\": \"P-001006\",\n  \"first_name\": \"John\",\n  \"last_name\": \"Doe\",\n  \"date_of_birth\": \"2010-05-15\",\n  \"gender\": \"MALE\",\n  \"address\": \"123 Main St, City, State 12345\",\n  \"phone\": \"(555) 123-4567\",\n  \"email\": \"john.doe@email.com\",\n  \"emergency_contact_name\": \"Jane Doe\",\n  \"emergency_contact_phone\": \"(555) 123-4568\",\n  \"nhi_verified\": true,\n  \"status\": \"ACTIVE\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/patients",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients"
+							]
+						}
+					}
+				},
+				{
+					"name": "Update Patient",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"phone\": \"(555) 999-8888\",\n  \"status\": \"MAINTENANCE\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/patients/1",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients",
+								"1"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Patient Statistics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/patients/stats",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients",
+								"stats"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Visits",
+			"item": [
+				{
+					"name": "Get Patient Visits",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/patients/1/visits",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients",
+								"1",
+								"visits"
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Visit",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"provider_id\": 2,\n  \"visit_date\": \"2026-02-25T10:00:00Z\",\n  \"procedure_type\": \"Adjustment\",\n  \"status\": \"SCHEDULED\",\n  \"notes\": \"Routine adjustment appointment\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/patients/1/visits",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients",
+								"1",
+								"visits"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Today's Visits",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/visits/today",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"visits",
+								"today"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Visit Statistics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/visits/stats",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"visits",
+								"stats"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Clinical Notes",
+			"item": [
+				{
+					"name": "Get Patient Clinical Notes",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/patients/1/clinical-notes",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients",
+								"1",
+								"clinical-notes"
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Clinical Note",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"content\": \"Patient presents with good oral hygiene. Treatment progressing as expected.\",\n  \"note_type\": \"TREATMENT\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/patients/1/clinical-notes",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients",
+								"1",
+								"clinical-notes"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Pending Verification Notes",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/clinical-notes/pending",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"clinical-notes",
+								"pending"
+							]
+						}
+					}
+				},
+				{
+					"name": "Verify Clinical Note",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"verification_notes\": \"Treatment plan approved. Continue with current mechanics.\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/clinical-notes/1/verify",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"clinical-notes",
+								"1",
+								"verify"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Documents",
+			"item": [
+				{
+					"name": "Get Patient Documents",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/patients/1/documents",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients",
+								"1",
+								"documents"
+							]
+						}
+					}
+				},
+				{
+					"name": "Upload Document",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "document",
+									"type": "file",
+									"src": []
+								},
+								{
+									"key": "type",
+									"value": "RADIOGRAPH"
+								},
+								{
+									"key": "description",
+									"value": "Initial panoramic radiograph"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/patients/1/documents",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"patients",
+								"1",
+								"documents"
+							]
+						}
+					}
+				},
+				{
+					"name": "Download Document",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/documents/1/download",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"documents",
+								"1",
+								"download"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Queue",
+			"item": [
+				{
+					"name": "Get Current Queue",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/queue",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"queue"
+							]
+						}
+					}
+				},
+				{
+					"name": "Add to Queue",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"patient_id\": 1,\n  \"provider_id\": 2,\n  \"priority\": \"NORMAL\",\n  \"procedure_type\": \"Adjustment\",\n  \"notes\": \"Routine adjustment\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/queue",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"queue"
+							]
+						}
+					}
+				},
+				{
+					"name": "Update Queue Status",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"IN_TREATMENT\",\n  \"notes\": \"Patient moved to treatment room\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/queue/1/status",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"queue",
+								"1",
+								"status"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Queue Statistics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/queue/stats",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"queue",
+								"stats"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Cases",
+			"item": [
+				{
+					"name": "Get All Cases",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/cases",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"cases"
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Case",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"patient_id\": 1,\n  \"student_id\": 5,\n  \"supervisor_id\": 2,\n  \"status\": \"ASSIGNED\",\n  \"progress_notes\": \"Initial case assignment for comprehensive orthodontic treatment.\",\n  \"requirements_met\": {\n    \"initial_exam\": true,\n    \"records_taken\": false,\n    \"treatment_plan\": false\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/cases",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"cases"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Student Cases",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/students/5/cases",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"students",
+								"5",
+								"cases"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Case Statistics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/cases/stats",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"cases",
+								"stats"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Inventory",
+			"item": [
+				{
+					"name": "Get Inventory Items",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/inventory",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"inventory"
+							]
+						}
+					}
+				},
+				{
+					"name": "Create Inventory Item",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Stainless Steel Archwire 0.016\",\n  \"category\": \"Wires\",\n  \"quantity\": 100,\n  \"unit\": \"pcs\",\n  \"minimum_threshold\": 50,\n  \"maximum_threshold\": 300,\n  \"location\": \"Storage A\",\n  \"supplier\": \"OrthoSupply Co.\",\n  \"cost_per_unit\": 12.50\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/inventory",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"inventory"
+							]
+						}
+					}
+				},
+				{
+					"name": "Update Stock",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"transaction_type\": \"IN\",\n  \"quantity\": 25,\n  \"reference_type\": \"PURCHASE\",\n  \"notes\": \"Monthly restock order\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/inventory/1/stock",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"inventory",
+								"1",
+								"stock"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Inventory Statistics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/inventory/stats",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"inventory",
+								"stats"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Users (Admin)",
+			"item": [
+				{
+					"name": "Get All Users",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/users",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"users"
+							]
+						}
+					}
+				},
+				{
+					"name": "Create User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Dr. Jane Smith\",\n  \"email\": \"jane.smith@orthoflow.edu\",\n  \"password\": \"Doctor123!\",\n  \"role\": \"ORTHODONTIST\",\n  \"department\": \"Orthodontics\",\n  \"status\": \"ACTIVE\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/users",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"users"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Staff Directory",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/users/staff",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"staff"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Reports (Admin)",
+			"item": [
+				{
+					"name": "Patient Status Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/patient-status?group_by=status",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"patient-status"
+							],
+							"query": [
+								{
+									"key": "group_by",
+									"value": "status"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Visit Summary Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/visit-summary?period=month",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"visit-summary"
+							],
+							"query": [
+								{
+									"key": "period",
+									"value": "month"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Inventory Alerts Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/inventory-alerts",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"inventory-alerts"
+							]
+						}
+					}
+				},
+				{
+					"name": "Dashboard Report",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reports/dashboard?period=month",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reports",
+								"dashboard"
+							],
+							"query": [
+								{
+									"key": "period",
+									"value": "month"
+								}
+							]
+						}
+					}
+				}
+			]
+		}
+	]
+}

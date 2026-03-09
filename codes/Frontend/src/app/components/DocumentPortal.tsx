@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Card, Button, Badge } from './UI';
-import { Upload, File, Image as ImageIcon, FileText, Download, RefreshCw, Trash2, RotateCcw, Loader2 } from 'lucide-react';
+import { Card, Button, Badge, RefreshButton } from './UI';
+import { Upload, File, Image as ImageIcon, FileText, Download, Trash2, RotateCcw, Loader2 } from 'lucide-react';
 import { apiService } from '../services/api';
 import { toast } from 'sonner';
 
@@ -351,10 +351,7 @@ export function DocumentPortal({ patientId, canUpload, canDelete }: Props) {
                   )}
                 </Button>
               )}
-              <Button variant="secondary" size="sm" onClick={loadDocuments} disabled={loading}>
-                <RefreshCw className="w-4 h-4 mr-1" />
-                Refresh
-              </Button>
+              <RefreshButton size="sm" onClick={loadDocuments} loading={loading} />
             </div>
           </div>
           <div className="divide-y divide-gray-100">

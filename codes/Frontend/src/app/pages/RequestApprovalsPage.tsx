@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, XCircle } from 'lucide-react';
-import { Card, Badge, Button } from '../components/UI';
+import { Card, Badge, Button, RefreshButton } from '../components/UI';
 import { apiService } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { Navigate, useNavigate } from 'react-router';
@@ -85,9 +85,7 @@ export function RequestApprovalsPage() {
           <div className="text-sm text-gray-600">
             Pending Requests: <span className="font-semibold text-gray-900">{requests.length}</span>
           </div>
-          <Button variant="secondary" size="sm" onClick={loadRequests} disabled={loading}>
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </Button>
+          <RefreshButton size="sm" onClick={loadRequests} loading={loading} />
         </div>
         <div className="divide-y divide-gray-100">
           {!loading && requests.length === 0 && (

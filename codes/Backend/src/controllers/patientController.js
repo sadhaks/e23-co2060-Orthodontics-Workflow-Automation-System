@@ -233,7 +233,7 @@ const buildDentalChartVersionPdf = ({ patient, version }) => {
         row.is_missing ? 'Missing' : null
       ].filter(Boolean).join(', ') || 'Healthy';
 
-      lines.push(`${index + 1}. Tooth ${row.tooth_code || '-'} (${row.dentition || '-'} ${row.notation_x || '-'}/${row.notation_y || '-'})`);
+      lines.push(`${index + 1}. Tooth ${getDentalChartVersionToothLabel(row)} (${row.dentition || '-'} ${row.notation_x || '-'}/${row.notation_y || '-'})`);
       lines.push(`   Status: ${row.status || 'HEALTHY'} | Flags: ${flags}`);
       lines.push(`   Pathology: ${row.pathology || '-'}`);
       lines.push(`   Treatment: ${row.treatment || '-'}`);
@@ -246,17 +246,66 @@ const buildDentalChartVersionPdf = ({ patient, version }) => {
   return buildPdfFromLines(wrapped);
 };
 
-const getToothVisualClass = (row) => {
-  if (row?.is_missing) return 'tooth missing';
-  if (row?.is_pathology) return 'tooth pathology';
-  if (row?.is_planned) return 'tooth planned';
-  if (row?.is_treated) return 'tooth treated';
-  return 'tooth healthy';
+const TOOTH_VISUAL_THEME = {
+  pathology: { border: '#ef4444', fill: '#fecaca' },
+  planned: { border: '#3b82f6', fill: '#bfdbfe' },
+  treated: { border: '#22c55e', fill: '#bbf7d0' },
+  missing: { border: '#64748b', fill: '#cbd5e1' },
+  healthy: { border: '#cbd5e1', fill: '#ffffff' }
+};
+
+const getToothVisualStates = (row) => {
+  const states = [];
+  if (row?.is_pathology) states.push('pathology');
+  if (row?.is_planned) states.push('planned');
+  if (row?.is_treated) states.push('treated');
+  if (row?.is_missing) states.push('missing');
+  return states;
+};
+
+const getToothVisualStyle = (row) => {
+  const states = getToothVisualStates(row);
+  if (states.length === 0) {
+    return `background: ${TOOTH_VISUAL_THEME.healthy.fill};`;
+  }
+
+  const gradientStops = states.map((state, index) => {
+    const start = (index * 100) / states.length;
+    const end = ((index + 1) * 100) / states.length;
+    const color = TOOTH_VISUAL_THEME[state].fill;
+    return `${color} ${start}%, ${color} ${end}%`;
+  }).join(', ');
+
+  return `background: linear-gradient(90deg, ${gradientStops});`;
+};
+
+const getDentalChartVersionToothLabel = (row) => {
+  const toothCode = row?.tooth_code || '-';
+  const notationX = String(row?.notation_x || '').trim();
+  const notationY = String(row?.notation_y || '').trim();
+  if (!notationX || !notationY) return toothCode;
+
+  if (row?.dentition === 'ADULT') return `ADULT ${notationX}/${notationY}`;
+  if (row?.dentition === 'MILK') return `MILK ${notationX}/${notationY}`;
+  return toothCode;
+};
+
+const compareDentalChartVersionRows = (a, b) => {
+  const aX = String(a?.notation_x || '');
+  const bX = String(b?.notation_x || '');
+  const xDiff = aX.localeCompare(bX, undefined, { numeric: true, sensitivity: 'base' });
+  if (xDiff !== 0) return xDiff;
+
+  const aY = String(a?.notation_y || '');
+  const bY = String(b?.notation_y || '');
+  return aY.localeCompare(bY, undefined, { numeric: true, sensitivity: 'base' });
 };
 
 const buildDentalChartVersionHtml = ({ patient, version }) => {
   const patientName = `${patient.first_name || ''} ${patient.last_name || ''}`.trim() || 'Unknown';
-  const entries = Array.isArray(version.snapshot_data) ? version.snapshot_data : [];
+  const entries = Array.isArray(version.snapshot_data)
+    ? [...version.snapshot_data].sort(compareDentalChartVersionRows)
+    : [];
   const createdAt = version.created_at ? String(version.created_at).slice(0, 19).replace('T', ' ') : 'N/A';
 
   const cards = entries.length
@@ -268,15 +317,17 @@ const buildDentalChartVersionHtml = ({ patient, version }) => {
         row.is_missing ? 'Missing' : null
       ].filter(Boolean).join(' • ') || 'Healthy';
       return `
-      <div class="${getToothVisualClass(row)}">
-        <div class="notation"><span class="x">${escapeHtml(row.notation_x || '-')}</span><span class="slash">/</span><span class="y">${escapeHtml(row.notation_y || '-')}</span></div>
-        <div class="tooth-icon">🦷</div>
-        <div class="meta">Tooth: ${escapeHtml(row.tooth_code || '-')}</div>
-        <div class="meta">Status: ${escapeHtml(row.status || 'HEALTHY')}</div>
-        <div class="flags">${escapeHtml(flags)}</div>
-        <div class="text">Pathology: ${escapeHtml(row.pathology || '-')}</div>
-        <div class="text">Treatment: ${escapeHtml(row.treatment || '-')}</div>
-        <div class="text">Annotated Date: ${escapeHtml(row.event_date ? String(row.event_date).slice(0, 19).replace('T', ' ') : '-')}</div>
+      <div class="tooth" style="${getToothVisualStyle(row)}">
+        <div class="tooth-content">
+          <div class="notation"><span class="x">${escapeHtml(row.notation_x || '-')}</span><span class="slash">/</span><span class="y">${escapeHtml(row.notation_y || '-')}</span></div>
+          <div class="tooth-icon">🦷</div>
+          <div class="meta">Tooth: ${escapeHtml(getDentalChartVersionToothLabel(row))}</div>
+          <div class="meta">Status: ${escapeHtml(row.status || 'HEALTHY')}</div>
+          <div class="flags">${escapeHtml(flags)}</div>
+          <div class="text">Pathology: ${escapeHtml(row.pathology || '-')}</div>
+          <div class="text">Treatment: ${escapeHtml(row.treatment || '-')}</div>
+          <div class="text">Annotated Date: ${escapeHtml(row.event_date ? String(row.event_date).slice(0, 19).replace('T', ' ') : '-')}</div>
+        </div>
       </div>`;
     }).join('')
     : '<p class="empty">No teeth were selected in this saved version.</p>';
@@ -289,8 +340,8 @@ const buildDentalChartVersionHtml = ({ patient, version }) => {
   <style>
     * { box-sizing: border-box; }
     body { font-family: Arial, Helvetica, sans-serif; margin: 0; color: #0f172a; background: #f8fafc; }
-    .page { padding: 24px; }
-    .header { border: 1px solid #cbd5e1; border-radius: 14px; padding: 16px; background: #fff; margin-bottom: 16px; }
+    .page { padding: 18px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+    .header { border: 1px solid #cbd5e1; border-radius: 14px; padding: 14px; background: #fff; margin-bottom: 12px; }
     .title { font-size: 20px; font-weight: 800; margin: 0 0 8px; }
     .sub { font-size: 12px; color: #475569; line-height: 1.45; }
     .legend { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; font-size: 11px; }
@@ -299,14 +350,10 @@ const buildDentalChartVersionHtml = ({ patient, version }) => {
     .d-planned { background: #3b82f6; }
     .d-treated { background: #22c55e; }
     .d-missing { background: #94a3b8; }
-    .d-healthy { background: #64748b; }
-    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-    .tooth { border-radius: 14px; padding: 10px; background: #ffffff; border: 2px solid #94a3b8; min-height: 152px; }
-    .tooth.pathology { border-color: #ef4444; background: #fef2f2; }
-    .tooth.planned { border-color: #3b82f6; background: #eff6ff; }
-    .tooth.treated { border-color: #22c55e; background: #f0fdf4; }
-    .tooth.missing { border-color: #64748b; border-style: dashed; background: #f8fafc; }
-    .tooth.healthy { border-color: #cbd5e1; background: #ffffff; }
+    .d-healthy { background: #ffffff; border: 1px solid #0f172a; }
+    .grid { display: flex; flex-wrap: wrap; gap: 14px; align-content: flex-start; }
+    .tooth { width: calc((100% - 28px) / 3); border: 1px solid #0f172a; border-radius: 14px; overflow: hidden; min-height: 138px; break-inside: avoid; page-break-inside: avoid; }
+    .tooth-content { padding: 9px; min-height: 138px; }
     .notation { font-weight: 800; font-size: 16px; margin-bottom: 4px; }
     .notation .x { color: #2563eb; }
     .notation .slash { color: #94a3b8; margin: 0 2px; }

@@ -266,6 +266,127 @@ const ensureAccessControlSchema = async () => {
     )
   `);
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS payment_records (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      patient_id INT NOT NULL,
+      payment_date DATETIME NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      currency CHAR(3) NOT NULL DEFAULT 'LKR',
+      payment_method ENUM('CASH', 'CARD', 'BANK_TRANSFER', 'ONLINE', 'CHEQUE', 'OTHER') NOT NULL DEFAULT 'CASH',
+      status ENUM('PENDING', 'PAID', 'PARTIAL', 'REFUNDED', 'VOID') NOT NULL DEFAULT 'PAID',
+      reference_number VARCHAR(255) NULL,
+      notes TEXT NULL,
+      created_by INT NOT NULL,
+      updated_by INT NOT NULL,
+      deleted_at TIMESTAMP NULL DEFAULT NULL,
+      deleted_by INT NULL DEFAULT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL,
+      INDEX idx_payment_records_patient (patient_id),
+      INDEX idx_payment_records_deleted_at (deleted_at),
+      INDEX idx_payment_records_payment_date (payment_date)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS patient_material_usages (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      patient_id INT NOT NULL,
+      inventory_item_id INT NOT NULL,
+      quantity INT NOT NULL,
+      used_at DATETIME NOT NULL,
+      purpose VARCHAR(255) NULL,
+      notes TEXT NULL,
+      created_by INT NOT NULL,
+      updated_by INT NOT NULL,
+      deleted_at TIMESTAMP NULL DEFAULT NULL,
+      deleted_by INT NULL DEFAULT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+      FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE RESTRICT,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL,
+      INDEX idx_patient_material_patient (patient_id),
+      INDEX idx_patient_material_item (inventory_item_id),
+      INDEX idx_patient_material_deleted_at (deleted_at),
+      INDEX idx_patient_material_used_at (used_at)
+    )
+  `);
+
+  const patientMaterialColumns = await query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'patient_material_usages'
+  `);
+  const patientMaterialColumnSet = new Set(patientMaterialColumns.map((row) => row.COLUMN_NAME));
+
+  if (!patientMaterialColumnSet.has('used_at')) {
+    await query('ALTER TABLE patient_material_usages ADD COLUMN used_at DATETIME NOT NULL AFTER quantity');
+  }
+  if (!patientMaterialColumnSet.has('purpose')) {
+    await query('ALTER TABLE patient_material_usages ADD COLUMN purpose VARCHAR(255) NULL AFTER used_at');
+  }
+  if (!patientMaterialColumnSet.has('notes')) {
+    await query('ALTER TABLE patient_material_usages ADD COLUMN notes TEXT NULL AFTER purpose');
+  }
+  if (!patientMaterialColumnSet.has('created_by')) {
+    await query('ALTER TABLE patient_material_usages ADD COLUMN created_by INT NOT NULL AFTER notes');
+  }
+  if (!patientMaterialColumnSet.has('updated_by')) {
+    await query('ALTER TABLE patient_material_usages ADD COLUMN updated_by INT NOT NULL AFTER created_by');
+  }
+  if (!patientMaterialColumnSet.has('deleted_at')) {
+    await query('ALTER TABLE patient_material_usages ADD COLUMN deleted_at TIMESTAMP NULL DEFAULT NULL AFTER updated_by');
+    await query('CREATE INDEX idx_patient_material_deleted_at ON patient_material_usages (deleted_at)');
+  }
+  if (!patientMaterialColumnSet.has('deleted_by')) {
+    await query('ALTER TABLE patient_material_usages ADD COLUMN deleted_by INT NULL DEFAULT NULL AFTER deleted_at');
+  }
+
+  const paymentRecordColumns = await query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'payment_records'
+  `);
+  const paymentRecordColumnSet = new Set(paymentRecordColumns.map((row) => row.COLUMN_NAME));
+
+  if (!paymentRecordColumnSet.has('currency')) {
+    await query(`ALTER TABLE payment_records ADD COLUMN currency CHAR(3) NOT NULL DEFAULT 'LKR' AFTER amount`);
+  }
+  if (!paymentRecordColumnSet.has('payment_method')) {
+    await query(`ALTER TABLE payment_records ADD COLUMN payment_method ENUM('CASH', 'CARD', 'BANK_TRANSFER', 'ONLINE', 'CHEQUE', 'OTHER') NOT NULL DEFAULT 'CASH' AFTER currency`);
+  }
+  if (!paymentRecordColumnSet.has('status')) {
+    await query(`ALTER TABLE payment_records ADD COLUMN status ENUM('PENDING', 'PAID', 'PARTIAL', 'REFUNDED', 'VOID') NOT NULL DEFAULT 'PAID' AFTER payment_method`);
+  }
+  if (!paymentRecordColumnSet.has('reference_number')) {
+    await query('ALTER TABLE payment_records ADD COLUMN reference_number VARCHAR(255) NULL AFTER status');
+  }
+  if (!paymentRecordColumnSet.has('notes')) {
+    await query('ALTER TABLE payment_records ADD COLUMN notes TEXT NULL AFTER reference_number');
+  }
+  if (!paymentRecordColumnSet.has('created_by')) {
+    await query('ALTER TABLE payment_records ADD COLUMN created_by INT NOT NULL AFTER notes');
+  }
+  if (!paymentRecordColumnSet.has('updated_by')) {
+    await query('ALTER TABLE payment_records ADD COLUMN updated_by INT NOT NULL AFTER created_by');
+  }
+  if (!paymentRecordColumnSet.has('deleted_at')) {
+    await query('ALTER TABLE payment_records ADD COLUMN deleted_at TIMESTAMP NULL DEFAULT NULL AFTER updated_by');
+  }
+  if (!paymentRecordColumnSet.has('deleted_by')) {
+    await query('ALTER TABLE payment_records ADD COLUMN deleted_by INT NULL DEFAULT NULL AFTER deleted_at');
+  }
+
   const clinicalNoteColumns = await query(`
     SELECT COLUMN_NAME
     FROM INFORMATION_SCHEMA.COLUMNS
@@ -295,6 +416,10 @@ const ensureAccessControlSchema = async () => {
   }
   if (!clinicalNoteColumnSet.has('deleted_by')) {
     await query('ALTER TABLE clinical_notes ADD COLUMN deleted_by INT NULL DEFAULT NULL AFTER deleted_at');
+  }
+  if (!clinicalNoteColumnSet.has('updated_by')) {
+    await query('ALTER TABLE clinical_notes ADD COLUMN updated_by INT NULL DEFAULT NULL AFTER author_id');
+    await query('UPDATE clinical_notes SET updated_by = author_id WHERE updated_by IS NULL');
   }
 
   const noteTypeRows = await query(`

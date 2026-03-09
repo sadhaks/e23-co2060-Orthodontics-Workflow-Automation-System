@@ -1,6 +1,7 @@
 import React, { ReactNode } from 'react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { RefreshCcw } from 'lucide-react';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -40,6 +41,28 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       />
     );
   }
+);
+
+export const RefreshButton = ({
+  loading = false,
+  className,
+  children,
+  ...props
+}: ButtonProps & { loading?: boolean }) => (
+  <Button
+    variant="secondary"
+    aria-busy={loading}
+    disabled={loading || props.disabled}
+    className={cn(
+      'flex items-center gap-2 transition-all duration-200',
+      loading ? 'ring-2 ring-blue-200 bg-blue-50 border-blue-200 text-blue-700' : 'hover:border-blue-300 hover:bg-blue-50 active:bg-blue-100',
+      className
+    )}
+    {...props}
+  >
+    <RefreshCcw className={cn('w-4 h-4', loading && 'animate-spin')} />
+    {loading ? 'Refreshing...' : (children || 'Refresh')}
+  </Button>
 );
 
 export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(

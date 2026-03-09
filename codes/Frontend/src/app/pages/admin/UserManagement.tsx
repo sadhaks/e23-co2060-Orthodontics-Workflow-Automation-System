@@ -25,7 +25,8 @@ import {
   CircularProgress,
   LinearProgress,
   Checkbox,
-  FormControlLabel
+  FormControlLabel,
+  IconButton
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -33,7 +34,8 @@ import {
   Delete as DeleteIcon,
   CheckCircle as CheckCircleIcon,
   DeleteForever as DeleteForeverIcon,
-  VpnKey as VpnKeyIcon
+  VpnKey as VpnKeyIcon,
+  Close as CloseIcon
 } from '@mui/icons-material';
 import { apiService } from '../../services/api';
 import { CreateUserForm } from '../../services/api';
@@ -50,6 +52,13 @@ export interface User {
   created_at: string;
   updated_at: string;
 }
+
+const initialUserFormData: CreateUserForm = {
+  name: '',
+  email: '',
+  role: '',
+  department: 'Orthodontics'
+};
 
 const UserManagement: React.FC = () => {
   const { user } = useAuth();
@@ -94,12 +103,7 @@ const UserManagement: React.FC = () => {
     processing: false
   });
 
-  const [formData, setFormData] = useState<CreateUserForm>({
-    name: '',
-    email: '',
-    role: '',
-    department: 'Orthodontics' // Fixed to Orthodontics department
-  });
+  const [formData, setFormData] = useState<CreateUserForm>(initialUserFormData);
 
   const roles = [
     { value: 'ADMIN', label: 'Administrator' },
@@ -109,6 +113,10 @@ const UserManagement: React.FC = () => {
     { value: 'RECEPTION', label: 'Receptionist' },
     { value: 'STUDENT', label: 'Student' }
   ];
+
+  const resetUserForm = () => {
+    setFormData(initialUserFormData);
+  };
 
   useEffect(() => {
     loadUsers();
@@ -196,7 +204,7 @@ const UserManagement: React.FC = () => {
       if (response.success) {
         setSnackbar({ open: true, message: response.message || 'User successfully created', severity: 'success' });
         setCreateDialogOpen(false);
-        setFormData({ name: '', email: '', role: '', department: 'Orthodontics' });
+        resetUserForm();
         loadUsers();
       } else {
         setSnackbar({ open: true, message: response.message || 'Failed to create user', severity: 'error' });
@@ -224,7 +232,7 @@ const UserManagement: React.FC = () => {
         setSnackbar({ open: true, message: 'User updated successfully', severity: 'success' });
         setEditDialogOpen(false);
         setSelectedUser(null);
-        setFormData({ name: '', email: '', role: '', department: 'Orthodontics' });
+        resetUserForm();
         loadUsers();
       } else {
         setSnackbar({ open: true, message: response.message || 'Failed to update user', severity: 'error' });
@@ -492,7 +500,11 @@ const UserManagement: React.FC = () => {
         <Button
           variant="contained"
           startIcon={<AddIcon />}
-          onClick={() => setCreateDialogOpen(true)}
+          onClick={() => {
+            setSelectedUser(null);
+            resetUserForm();
+            setCreateDialogOpen(true);
+          }}
           sx={{
             borderRadius: '10px',
             textTransform: 'none',
@@ -730,25 +742,67 @@ const UserManagement: React.FC = () => {
       </Paper>
 
       {/* Create User Dialog */}
-      <Dialog open={createDialogOpen} onClose={() => !creatingUser && setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ fontWeight: 800, color: '#0f172a', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>Create New User</DialogTitle>
-        <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
-            <TextField
-              label="Name"
-              fullWidth
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              required
-            />
-            <TextField
-              label="Email"
-              type="email"
-              fullWidth
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              required
-            />
+      <Dialog
+        open={createDialogOpen}
+        onClose={() => {
+          if (creatingUser) return;
+          setCreateDialogOpen(false);
+          resetUserForm();
+        }}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: '24px',
+            overflow: 'hidden',
+            boxShadow: '0 30px 80px rgba(15, 23, 42, 0.22)'
+          }
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 800, color: '#0f172a', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc', px: 4, py: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Box>Create New User</Box>
+            <IconButton
+              onClick={() => {
+                setCreateDialogOpen(false);
+                resetUserForm();
+              }}
+              disabled={creatingUser}
+              sx={{
+                width: 40,
+                height: 40,
+                border: '1px solid #fecaca',
+                bgcolor: '#fef2f2',
+                color: '#dc2626',
+                '&:hover': { bgcolor: '#fee2e2', borderColor: '#fca5a5' },
+                '&:active': { bgcolor: '#fecaca' }
+              }}
+            >
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ px: 4, py: 3 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, pt: 2, border: '1px solid #bbf7d0', backgroundColor: 'rgba(240, 253, 244, 0.9)', borderRadius: '20px', p: 3 }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Name</Typography>
+              <TextField
+                fullWidth
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                required
+              />
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Email</Typography>
+              <TextField
+                type="email"
+                fullWidth
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                required
+              />
+            </Box>
             <Alert severity="info">
               A secure temporary password will be generated automatically and sent to this user by email.
             </Alert>
@@ -760,26 +814,31 @@ const UserManagement: React.FC = () => {
                 <LinearProgress />
               </Box>
             )}
-            <FormControl fullWidth>
-              <InputLabel>Role</InputLabel>
-              <Select
-                value={formData.role}
-                label="Role"
-                onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                required
-              >
-                {roles.map((role) => (
-                  <MenuItem key={role.value} value={role.value}>
-                    {role.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Role</Typography>
+              <FormControl fullWidth>
+                <Select
+                  value={formData.role}
+                  displayEmpty
+                  onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                  required
+                >
+                  <MenuItem value="" disabled>Select role</MenuItem>
+                  {roles.map((role) => (
+                    <MenuItem key={role.value} value={role.value}>
+                      {role.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setCreateDialogOpen(false)} disabled={creatingUser}>Cancel</Button>
-          <Button onClick={handleCreateUser} variant="contained" disabled={creatingUser || !formData.name || !formData.email || !formData.role}>
+        <DialogActions sx={{ px: 4, py: 3, pt: 0, gap: 1.5 }}>
+          <Button onClick={() => { setCreateDialogOpen(false); resetUserForm(); }} disabled={creatingUser} variant="outlined" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 700, px: 3, py: 1.2 }}>
+            Cancel
+          </Button>
+          <Button onClick={handleCreateUser} variant="contained" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 800, px: 3.5, py: 1.2 }} disabled={creatingUser || !formData.name || !formData.email || !formData.role}>
             {creatingUser ? (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <CircularProgress size={16} color="inherit" />
@@ -793,48 +852,87 @@ const UserManagement: React.FC = () => {
       </Dialog>
 
       {/* Edit User Dialog */}
-      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ fontWeight: 800, color: '#0f172a', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc' }}>Edit User</DialogTitle>
-        <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
-            <TextField
-              label="Name"
-              fullWidth
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              required
-            />
-            <TextField
-              label="Email"
-              type="email"
-              fullWidth
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              required
-            />
+      <Dialog
+        open={editDialogOpen}
+        onClose={() => setEditDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: '24px',
+            overflow: 'hidden',
+            boxShadow: '0 30px 80px rgba(15, 23, 42, 0.22)'
+          }
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 800, color: '#0f172a', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc', px: 4, py: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Box>Edit User</Box>
+            <IconButton
+              onClick={() => setEditDialogOpen(false)}
+              sx={{
+                width: 40,
+                height: 40,
+                border: '1px solid #fecaca',
+                bgcolor: '#fef2f2',
+                color: '#dc2626',
+                '&:hover': { bgcolor: '#fee2e2', borderColor: '#fca5a5' },
+                '&:active': { bgcolor: '#fecaca' }
+              }}
+            >
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ px: 4, py: 3 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, pt: 2, border: '1px solid #ddd6fe', backgroundColor: 'rgba(245, 243, 255, 0.9)', borderRadius: '20px', p: 3 }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Name</Typography>
+              <TextField
+                fullWidth
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                required
+              />
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Email</Typography>
+              <TextField
+                type="email"
+                fullWidth
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                required
+              />
+            </Box>
             <Alert severity="info">
               To reset this user&apos;s password, close this dialog and use the <strong>Reset Password</strong> action.
             </Alert>
-            <FormControl fullWidth>
-              <InputLabel>Role</InputLabel>
-              <Select
-                value={formData.role}
-                label="Role"
-                onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                required
-              >
-                {roles.map((role) => (
-                  <MenuItem key={role.value} value={role.value}>
-                    {role.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Role</Typography>
+              <FormControl fullWidth>
+                <Select
+                  value={formData.role}
+                  displayEmpty
+                  onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                  required
+                >
+                  <MenuItem value="" disabled>Select role</MenuItem>
+                  {roles.map((role) => (
+                    <MenuItem key={role.value} value={role.value}>
+                      {role.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setEditDialogOpen(false)}>Cancel</Button>
-          <Button onClick={handleUpdateUser} variant="contained" disabled={!formData.name || !formData.email || !formData.role}>
+        <DialogActions sx={{ px: 4, py: 3, pt: 0, gap: 1.5 }}>
+          <Button onClick={() => setEditDialogOpen(false)} variant="outlined" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 700, px: 3, py: 1.2 }}>
+            Cancel
+          </Button>
+          <Button onClick={handleUpdateUser} variant="contained" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 800, px: 3.5, py: 1.2 }} disabled={!formData.name || !formData.email || !formData.role}>
             Update User
           </Button>
         </DialogActions>

@@ -46,6 +46,8 @@ export const API_ENDPOINTS = {
     VISITS: (id: string) => `/api/visits/patients/${id}`,
     DOCUMENTS: (id: string) => `/api/documents/patients/${id}`,
     CLINICAL_NOTES: (id: string) => `/api/clinical-notes/patients/${id}`,
+    PAYMENT_RECORDS: (id: string) => `/api/payment-records/patients/${id}`,
+    MATERIAL_USAGES: (id: string) => `/api/patient-materials/patients/${id}`,
     HISTORY: (id: string) => `/api/patients/${id}/history`,
     DENTAL_CHART: (id: string) => `/api/patients/${id}/dental-chart`,
     DENTAL_CHART_TOOTH: (id: string, toothNumber: number) => `/api/patients/${id}/dental-chart/${toothNumber}`,
@@ -90,6 +92,24 @@ export const API_ENDPOINTS = {
     STATS: '/api/clinical-notes/stats',
     PATIENT_NOTES: (patientId: string) => `/api/clinical-notes/patients/${patientId}`,
     CREATE: (patientId: string) => `/api/clinical-notes/patients/${patientId}`,
+  },
+
+  PAYMENT_RECORDS: {
+    DETAIL: (id: string) => `/api/payment-records/${id}`,
+    UPDATE: (id: string) => `/api/payment-records/${id}`,
+    DELETE: (id: string) => `/api/payment-records/${id}`,
+    RESTORE: (id: string) => `/api/payment-records/${id}/restore`,
+    PATIENT_RECORDS: (patientId: string) => `/api/payment-records/patients/${patientId}`,
+    CREATE: (patientId: string) => `/api/payment-records/patients/${patientId}`,
+  },
+
+  PATIENT_MATERIALS: {
+    DETAIL: (id: string) => `/api/patient-materials/${id}`,
+    UPDATE: (id: string) => `/api/patient-materials/${id}`,
+    DELETE: (id: string) => `/api/patient-materials/${id}`,
+    RESTORE: (id: string) => `/api/patient-materials/${id}/restore`,
+    PATIENT_RECORDS: (patientId: string) => `/api/patient-materials/patients/${patientId}`,
+    CREATE: (patientId: string) => `/api/patient-materials/patients/${patientId}`,
   },
   
   // Queue

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Table, Button, Input, Badge } from '../components/UI';
-import { Search, Filter, UserPlus, Pencil, Trash2, ChevronDown, RefreshCcw } from 'lucide-react';
+import { Card, Table, Button, Input, Badge, RefreshButton } from '../components/UI';
+import { Search, Filter, UserPlus, Pencil, Trash2, ChevronDown, RefreshCcw, Calendar, X } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { apiService } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -51,7 +51,7 @@ const initialForm = {
   registration_date: '',
   date_of_birth: '',
   age: '',
-  gender: 'FEMALE',
+  gender: '',
   phone: '',
   email: '',
   address: '',
@@ -257,6 +257,20 @@ export function PatientListPage() {
     onConfirm: null,
     processing: false
   });
+  const createRegistrationDateRef = useRef<HTMLInputElement | null>(null);
+  const createBirthDateRef = useRef<HTMLInputElement | null>(null);
+  const editRegistrationDateRef = useRef<HTMLInputElement | null>(null);
+  const editBirthDateRef = useRef<HTMLInputElement | null>(null);
+
+  const openDateTimePicker = (input: HTMLInputElement | null) => {
+    if (!input) return;
+    if (typeof input.showPicker === 'function') {
+      input.showPicker();
+      return;
+    }
+    input.focus();
+    input.click();
+  };
 
   const [createForm, setCreateForm] = useState(initialForm);
   const [editForm, setEditForm] = useState(initialForm);
@@ -801,16 +815,7 @@ export function PatientListPage() {
               <Filter className="w-4 h-4" />
               Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
             </Button>
-            <Button
-              variant="secondary"
-              className={`flex items-center gap-2 transition-all ${refreshing ? 'ring-2 ring-blue-200 bg-blue-50 border-blue-200 text-blue-700' : ''}`}
-              onClick={handleManualRefresh}
-              disabled={refreshing}
-              aria-busy={refreshing}
-            >
-              <RefreshCcw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-              {refreshing ? 'Refreshing...' : 'Refresh'}
-            </Button>
+            <RefreshButton onClick={handleManualRefresh} loading={refreshing} />
           </div>
         </div>
         {showFilters && (
@@ -1007,87 +1012,154 @@ export function PatientListPage() {
 
       {createOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-2xl rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
-            <h3 className="text-xl font-bold text-gray-900 mb-4">Add New Patient</h3>
-            <form className="space-y-4" onSubmit={handleCreate}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Input
-                  placeholder="First name"
-                  value={createForm.first_name}
-                  onChange={(e) => setCreateForm((s) => ({ ...s, first_name: e.target.value }))}
-                  required
-                />
-                <Input
-                  placeholder="Last name"
-                  value={createForm.last_name}
-                  onChange={(e) => setCreateForm((s) => ({ ...s, last_name: e.target.value }))}
-                  required
-                />
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+              <h3 className="text-xl font-bold text-gray-900">Add New Patient</h3>
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                className="h-10 w-10 border border-red-200 bg-red-50 text-red-600 hover:border-red-300 hover:bg-red-100 active:bg-red-200"
+                onClick={() => setCreateOpen(false)}
+                disabled={saving}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <form className="max-h-[calc(90vh-81px)] overflow-y-auto px-6 py-5 space-y-4" onSubmit={handleCreate}>
+              <div className="rounded-xl border border-green-100 bg-green-50/60 p-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-600">Registration Date &amp; Time</label>
+                  <label className="text-xs font-semibold text-gray-600">First Name</label>
                   <Input
-                    type="datetime-local"
-                    value={createForm.registration_date}
-                    onChange={(e) => setCreateForm((s) => ({ ...s, registration_date: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-600">Birth Date</label>
-                  <Input
-                    type="date"
-                    value={createForm.date_of_birth}
-                    onChange={(e) =>
-                      setCreateForm((s) => {
-                        const date_of_birth = e.target.value;
-                        return {
-                          ...s,
-                          date_of_birth,
-                          age: calculateAgeFromDob(date_of_birth)
-                        };
-                      })
-                    }
+                    value={createForm.first_name}
+                    onChange={(e) => setCreateForm((s) => ({ ...s, first_name: e.target.value }))}
                     required
                   />
                 </div>
-                <Input
-                  type="number"
-                  min={0}
-                  max={130}
-                  placeholder="Age"
-                  value={createForm.age}
-                  readOnly
-                />
-                <select
-                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={createForm.gender}
-                  onChange={(e) => setCreateForm((s) => ({ ...s, gender: e.target.value }))}
-                >
-                  <option value="FEMALE">Female</option>
-                  <option value="MALE">Male</option>
-                  <option value="OTHER">Other</option>
-                </select>
-                <Input
-                  placeholder="Phone"
-                  value={createForm.phone}
-                  onChange={(e) => setCreateForm((s) => ({ ...s, phone: e.target.value }))}
-                />
-                <Input
-                  type="email"
-                  placeholder="Email"
-                  value={createForm.email}
-                  onChange={(e) => setCreateForm((s) => ({ ...s, email: e.target.value }))}
-                />
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Last Name</label>
+                  <Input
+                    value={createForm.last_name}
+                    onChange={(e) => setCreateForm((s) => ({ ...s, last_name: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Registration Date &amp; Time</label>
+                  <div className="flex items-center gap-3 rounded-md border border-gray-200 bg-white px-3 py-2">
+                    <input
+                      ref={createRegistrationDateRef}
+                      type="datetime-local"
+                      value={createForm.registration_date}
+                      onChange={(e) => setCreateForm((s) => ({ ...s, registration_date: e.target.value }))}
+                      className="sr-only"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon"
+                      className="h-10 w-10 border-gray-200"
+                      onClick={() => openDateTimePicker(createRegistrationDateRef.current)}
+                      title={createForm.registration_date || 'Select registration date and time'}
+                    >
+                      <Calendar className="w-4 h-4" />
+                    </Button>
+                    <span className="text-sm text-gray-600">
+                      {createForm.registration_date ? createForm.registration_date.replace('T', ' ') : 'Select registration date and time'}
+                    </span>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Birth Date</label>
+                  <div className="flex items-center gap-3 rounded-md border border-gray-200 bg-white px-3 py-2">
+                    <input
+                      ref={createBirthDateRef}
+                      type="date"
+                      value={createForm.date_of_birth}
+                      onChange={(e) =>
+                        setCreateForm((s) => {
+                          const date_of_birth = e.target.value;
+                          return {
+                            ...s,
+                            date_of_birth,
+                            age: calculateAgeFromDob(date_of_birth)
+                          };
+                        })
+                      }
+                      className="sr-only"
+                      required
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon"
+                      className="h-10 w-10 border-gray-200"
+                      onClick={() => openDateTimePicker(createBirthDateRef.current)}
+                      title={createForm.date_of_birth || 'Select birth date'}
+                    >
+                      <Calendar className="w-4 h-4" />
+                    </Button>
+                    <span className="text-sm text-gray-600">
+                      {createForm.date_of_birth || 'Select birth date'}
+                    </span>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Age</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={130}
+                    value={createForm.age}
+                    readOnly
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Gender</label>
+                  <select
+                    className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={createForm.gender}
+                    onChange={(e) => setCreateForm((s) => ({ ...s, gender: e.target.value }))}
+                    required
+                  >
+                    <option value="">Select gender</option>
+                    <option value="FEMALE">Female</option>
+                    <option value="MALE">Male</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Phone</label>
+                  <Input
+                    value={createForm.phone}
+                    onChange={(e) => setCreateForm((s) => ({ ...s, phone: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Email</label>
+                  <Input
+                    type="email"
+                    value={createForm.email}
+                    onChange={(e) => setCreateForm((s) => ({ ...s, email: e.target.value }))}
+                  />
+                </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="text-xs font-semibold text-gray-600">Address</label>
+                    <Input
+                      value={createForm.address}
+                      onChange={(e) => setCreateForm((s) => ({ ...s, address: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="text-xs font-semibold text-gray-600">Province</label>
+                    <Input
+                      value={createForm.province}
+                      onChange={(e) => setCreateForm((s) => ({ ...s, province: e.target.value }))}
+                    />
+                  </div>
+                </div>
               </div>
-              <Input
-                placeholder="Address"
-                value={createForm.address}
-                onChange={(e) => setCreateForm((s) => ({ ...s, address: e.target.value }))}
-              />
-              <Input
-                placeholder="Province"
-                value={createForm.province}
-                onChange={(e) => setCreateForm((s) => ({ ...s, province: e.target.value }))}
-              />
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)} disabled={saving}>
@@ -1104,86 +1176,151 @@ export function PatientListPage() {
 
       {editOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-2xl rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
-            <h3 className="text-xl font-bold text-gray-900 mb-4">Edit Patient (General Details)</h3>
-            <form className="space-y-4" onSubmit={handleEdit}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Input
-                  placeholder="First name"
-                  value={editForm.first_name}
-                  onChange={(e) => setEditForm((s) => ({ ...s, first_name: e.target.value }))}
-                  required
-                />
-                <Input
-                  placeholder="Last name"
-                  value={editForm.last_name}
-                  onChange={(e) => setEditForm((s) => ({ ...s, last_name: e.target.value }))}
-                  required
-                />
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+              <h3 className="text-xl font-bold text-gray-900">Edit Patient (General Details)</h3>
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                className="h-10 w-10 border border-red-200 bg-red-50 text-red-600 hover:border-red-300 hover:bg-red-100 active:bg-red-200"
+                onClick={() => setEditOpen(false)}
+                disabled={saving}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <form className="max-h-[calc(90vh-81px)] overflow-y-auto px-6 py-5 space-y-4" onSubmit={handleEdit}>
+              <div className="rounded-xl border border-amber-100 bg-amber-50/60 p-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">First Name</label>
+                  <Input
+                    value={editForm.first_name}
+                    onChange={(e) => setEditForm((s) => ({ ...s, first_name: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Last Name</label>
+                  <Input
+                    value={editForm.last_name}
+                    onChange={(e) => setEditForm((s) => ({ ...s, last_name: e.target.value }))}
+                    required
+                  />
+                </div>
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-gray-600">Registration Date &amp; Time</label>
-                  <Input
-                    type="datetime-local"
-                    value={editForm.registration_date}
-                    onChange={(e) => setEditForm((s) => ({ ...s, registration_date: e.target.value }))}
-                  />
+                  <div className="flex items-center gap-3 rounded-md border border-gray-200 bg-white px-3 py-2">
+                    <input
+                      ref={editRegistrationDateRef}
+                      type="datetime-local"
+                      value={editForm.registration_date}
+                      onChange={(e) => setEditForm((s) => ({ ...s, registration_date: e.target.value }))}
+                      className="sr-only"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon"
+                      className="h-10 w-10 border-gray-200"
+                      onClick={() => openDateTimePicker(editRegistrationDateRef.current)}
+                      title={editForm.registration_date || 'Select registration date and time'}
+                    >
+                      <Calendar className="w-4 h-4" />
+                    </Button>
+                    <span className="text-sm text-gray-600">
+                      {editForm.registration_date ? editForm.registration_date.replace('T', ' ') : 'Select registration date and time'}
+                    </span>
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-gray-600">Birth Date</label>
+                  <div className="flex items-center gap-3 rounded-md border border-gray-200 bg-white px-3 py-2">
+                    <input
+                      ref={editBirthDateRef}
+                      type="date"
+                      value={editForm.date_of_birth}
+                      onChange={(e) =>
+                        setEditForm((s) => {
+                          const date_of_birth = e.target.value;
+                          return {
+                            ...s,
+                            date_of_birth,
+                            age: calculateAgeFromDob(date_of_birth)
+                          };
+                        })
+                      }
+                      className="sr-only"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon"
+                      className="h-10 w-10 border-gray-200"
+                      onClick={() => openDateTimePicker(editBirthDateRef.current)}
+                      title={editForm.date_of_birth || 'Select birth date'}
+                    >
+                      <Calendar className="w-4 h-4" />
+                    </Button>
+                    <span className="text-sm text-gray-600">
+                      {editForm.date_of_birth || 'Select birth date'}
+                    </span>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Age</label>
                   <Input
-                    type="date"
-                    value={editForm.date_of_birth}
-                    onChange={(e) =>
-                      setEditForm((s) => {
-                        const date_of_birth = e.target.value;
-                        return {
-                          ...s,
-                          date_of_birth,
-                          age: calculateAgeFromDob(date_of_birth)
-                        };
-                      })
-                    }
+                    type="number"
+                    min={0}
+                    max={130}
+                    value={editForm.age}
+                    readOnly
                   />
                 </div>
-                <Input
-                  type="number"
-                  min={0}
-                  max={130}
-                  placeholder="Age"
-                  value={editForm.age}
-                  readOnly
-                />
-                <select
-                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={editForm.gender}
-                  onChange={(e) => setEditForm((s) => ({ ...s, gender: e.target.value }))}
-                >
-                  <option value="FEMALE">Female</option>
-                  <option value="MALE">Male</option>
-                  <option value="OTHER">Other</option>
-                </select>
-                <Input
-                  placeholder="Phone"
-                  value={editForm.phone}
-                  onChange={(e) => setEditForm((s) => ({ ...s, phone: e.target.value }))}
-                />
-                <Input
-                  type="email"
-                  placeholder="Email"
-                  value={editForm.email}
-                  onChange={(e) => setEditForm((s) => ({ ...s, email: e.target.value }))}
-                />
-                <Input
-                  placeholder="Province"
-                  value={editForm.province}
-                  onChange={(e) => setEditForm((s) => ({ ...s, province: e.target.value }))}
-                />
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Gender</label>
+                  <select
+                    className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={editForm.gender}
+                    onChange={(e) => setEditForm((s) => ({ ...s, gender: e.target.value }))}
+                  >
+                    <option value="FEMALE">Female</option>
+                    <option value="MALE">Male</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Phone</label>
+                  <Input
+                    value={editForm.phone}
+                    onChange={(e) => setEditForm((s) => ({ ...s, phone: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Email</label>
+                  <Input
+                    type="email"
+                    value={editForm.email}
+                    onChange={(e) => setEditForm((s) => ({ ...s, email: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-600">Province</label>
+                  <Input
+                    value={editForm.province}
+                    onChange={(e) => setEditForm((s) => ({ ...s, province: e.target.value }))}
+                  />
+                </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="text-xs font-semibold text-gray-600">Address</label>
+                    <Input
+                      value={editForm.address}
+                      onChange={(e) => setEditForm((s) => ({ ...s, address: e.target.value }))}
+                    />
+                  </div>
+                </div>
               </div>
-              <Input
-                placeholder="Address"
-                value={editForm.address}
-                onChange={(e) => setEditForm((s) => ({ ...s, address: e.target.value }))}
-              />
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="secondary" onClick={() => setEditOpen(false)} disabled={saving}>
@@ -1200,51 +1337,65 @@ export function PatientListPage() {
 
       {assignOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-lg rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
-            <h3 className="text-xl font-bold text-gray-900 mb-4">
-              {canOrthoAssignCareTeam ? 'Assign Care Team' : 'Assign Care Team'}
-            </h3>
-            <form className="space-y-4" onSubmit={handleAssign}>
-              {canOrthoAssignCareTeam && (
-                <>
-                  <MultiSelectDropdown
-                    label="Assign Dental Surgeons"
-                    options={assignableSurgeons}
-                    selectedIds={assignSurgeonIds}
-                    onChange={setAssignSurgeonIds}
-                    placeholder="Select dental surgeons"
-                    testIdPrefix="assign-surgeons"
-                  />
-                  <MultiSelectDropdown
-                    label="Assign Students"
-                    options={assignableStudents}
-                    selectedIds={assignStudentIds}
-                    onChange={setAssignStudentIds}
-                    placeholder="Select students"
-                    testIdPrefix="assign-students"
-                  />
-                </>
-              )}
-              {!canOrthoAssignCareTeam && (
-                <>
-                  <MultiSelectDropdown
-                    label="Assign Orthodontists"
-                    options={orthodontists}
-                    selectedIds={assignOrthodontistIds}
-                    onChange={setAssignOrthodontistIds}
-                    placeholder="Select orthodontists"
-                    testIdPrefix="assign-orthodontists"
-                  />
-                  <MultiSelectDropdown
-                    label="Assign Dental Surgeons"
-                    options={assignableSurgeons}
-                    selectedIds={assignSurgeonIds}
-                    onChange={setAssignSurgeonIds}
-                    placeholder="Select dental surgeons"
-                    testIdPrefix="assign-surgeons"
-                  />
-                </>
-              )}
+          <div className="w-full max-w-lg max-h-[90vh] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+              <h3 className="text-xl font-bold text-gray-900">
+                {canOrthoAssignCareTeam ? 'Assign Care Team' : 'Assign Care Team'}
+              </h3>
+              <Button
+                type="button"
+                variant="secondary"
+                size="icon"
+                className="h-10 w-10 border border-red-200 bg-red-50 text-red-600 hover:border-red-300 hover:bg-red-100 active:bg-red-200"
+                onClick={() => setAssignOpen(false)}
+                disabled={saving}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <form className="max-h-[calc(90vh-81px)] overflow-y-auto px-6 py-5 space-y-4" onSubmit={handleAssign}>
+              <div className="rounded-xl border border-purple-100 bg-purple-50/60 p-5 space-y-4">
+                {canOrthoAssignCareTeam && (
+                  <>
+                    <MultiSelectDropdown
+                      label="Assign Dental Surgeons"
+                      options={assignableSurgeons}
+                      selectedIds={assignSurgeonIds}
+                      onChange={setAssignSurgeonIds}
+                      placeholder="Select dental surgeons"
+                      testIdPrefix="assign-surgeons"
+                    />
+                    <MultiSelectDropdown
+                      label="Assign Students"
+                      options={assignableStudents}
+                      selectedIds={assignStudentIds}
+                      onChange={setAssignStudentIds}
+                      placeholder="Select students"
+                      testIdPrefix="assign-students"
+                    />
+                  </>
+                )}
+                {!canOrthoAssignCareTeam && (
+                  <>
+                    <MultiSelectDropdown
+                      label="Assign Orthodontists"
+                      options={orthodontists}
+                      selectedIds={assignOrthodontistIds}
+                      onChange={setAssignOrthodontistIds}
+                      placeholder="Select orthodontists"
+                      testIdPrefix="assign-orthodontists"
+                    />
+                    <MultiSelectDropdown
+                      label="Assign Dental Surgeons"
+                      options={assignableSurgeons}
+                      selectedIds={assignSurgeonIds}
+                      onChange={setAssignSurgeonIds}
+                      placeholder="Select dental surgeons"
+                      testIdPrefix="assign-surgeons"
+                    />
+                  </>
+                )}
+              </div>
 
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="secondary" onClick={() => setAssignOpen(false)} disabled={saving}>
