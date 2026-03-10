@@ -1,9 +1,9 @@
 # This theme is based on https://github.com/jekyll/minima
 # Please refer above link to know the available configurations
 
-title: ""
+title: "Orthodontics Workflow Automation System"
 remote_theme: cepdnaclk/eYY-project-theme
-description: ""
+description: "A web-based clinical management platform for orthodontic patient records, workflows, and operational coordination."
 markdown: kramdown
 
 kramdown:
