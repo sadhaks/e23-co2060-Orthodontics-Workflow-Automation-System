@@ -8,17 +8,124 @@ const {
 } = require('../config/database');
 const { logAuditEvent } = require('../middleware/errorHandler');
 
+const QUEUE_STATUSES = ['IN_WAITING_ROOM', 'UNDER_CONSULTATION', 'UNDER_TREATMENT', 'COMPLETED'];
+const GLOBAL_QUEUE_ROLES = new Set(['ADMIN', 'NURSE', 'RECEPTION', 'ORTHODONTIST', 'DENTAL_SURGEON']);
+const LOCAL_QUEUE_ROLES = new Set(['STUDENT']);
+
+const normalizeQueueStatus = (status) => {
+  const normalized = String(status || '').toUpperCase();
+  const legacyMap = {
+    WAITING: 'IN_WAITING_ROOM',
+    PREPARATION: 'UNDER_CONSULTATION',
+    IN_TREATMENT: 'UNDER_TREATMENT'
+  };
+  return legacyMap[normalized] || normalized || 'IN_WAITING_ROOM';
+};
+
+const cleanupCompletedQueueEntries = async () => {
+  await query(
+    `DELETE FROM queue
+     WHERE status = 'COMPLETED'
+       AND completion_time IS NOT NULL
+       AND completion_time < DATE_SUB(NOW(), INTERVAL 24 HOUR)`
+  );
+};
+
+const buildQueueScope = (user, alias = 'q', options = {}) => {
+  const forceAssignedScope = options.assignedOnly && (GLOBAL_QUEUE_ROLES.has(user.role) || LOCAL_QUEUE_ROLES.has(user.role));
+
+  if (GLOBAL_QUEUE_ROLES.has(user.role) && !forceAssignedScope) {
+    return { clause: '', params: [] };
+  }
+
+  if (LOCAL_QUEUE_ROLES.has(user.role) || forceAssignedScope) {
+    return {
+      clause: `
+        AND EXISTS (
+          SELECT 1
+          FROM patient_assignments pa_scope
+          WHERE pa_scope.patient_id = ${alias}.patient_id
+            AND pa_scope.user_id = ?
+            AND pa_scope.assignment_role = ?
+            AND pa_scope.active = TRUE
+        )
+      `,
+      params: [user.id, user.role]
+    };
+  }
+
+  return { clause: 'AND 1 = 0', params: [] };
+};
+
+const getQueueEntryForUser = async (queueId, user, permission = 'read') => {
+  const scope = buildQueueScope(user, 'q');
+  const rows = await query(
+    `SELECT q.*
+     FROM queue q
+     WHERE q.id = ?
+       ${scope.clause}
+     LIMIT 1`,
+    [queueId, ...scope.params]
+  );
+
+  if (!rows.length) {
+    return null;
+  }
+
+  if (permission === 'delete' && user.role !== 'RECEPTION') {
+    return null;
+  }
+
+  if (permission === 'update' && user.role === 'ADMIN') {
+    return null;
+  }
+
+  return rows[0];
+};
+
+const queueSelectFields = `
+  q.*,
+  p.patient_code,
+  CONCAT(p.first_name, ' ', p.last_name) as patient_name,
+  TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) as patient_age,
+  p.gender as patient_gender,
+  provider.name as provider_name,
+  provider.role as provider_role,
+  student.name as student_name,
+  (
+    SELECT GROUP_CONCAT(
+      DISTINCT CONCAT(assigned_user.name, ' (', REPLACE(pa.assignment_role, '_', ' '), ')')
+      ORDER BY pa.assignment_role, assigned_user.name
+      SEPARATOR ', '
+    )
+    FROM patient_assignments pa
+    INNER JOIN users assigned_user
+      ON assigned_user.id = pa.user_id
+     AND assigned_user.status = 'ACTIVE'
+    WHERE pa.patient_id = q.patient_id
+      AND pa.active = TRUE
+      AND pa.assignment_role IN ('ORTHODONTIST', 'DENTAL_SURGEON', 'STUDENT')
+  ) as assigned_clinical_staff
+`;
+
+const queueJoins = `
+  LEFT JOIN patients p ON q.patient_id = p.id
+  LEFT JOIN users provider ON q.provider_id = provider.id
+  LEFT JOIN users student ON q.student_id = student.id
+`;
+
 // Get current queue
 const getQueue = async (req, res) => {
   try {
+    await cleanupCompletedQueueEntries();
     const { status, priority } = req.query;
 
-    let whereClause = 'WHERE q.status != "COMPLETED"';
+    let whereClause = 'WHERE q.arrival_time >= CURDATE()';
     let queryParams = [];
 
     if (status) {
       whereClause += ' AND q.status = ?';
-      queryParams.push(status);
+      queryParams.push(normalizeQueueStatus(status));
     }
 
     if (priority) {
@@ -26,22 +133,22 @@ const getQueue = async (req, res) => {
       queryParams.push(priority);
     }
 
+    const scope = buildQueueScope(req.user, 'q', { assignedOnly: req.query.scope === 'assigned' });
+    whereClause += ` ${scope.clause}`;
+    queryParams.push(...scope.params);
+
     const queueQuery = `
-      SELECT 
-        q.*,
-        p.patient_code,
-        CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-        TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) as patient_age,
-        p.gender as patient_gender,
-        provider.name as provider_name,
-        provider.role as provider_role,
-        student.name as student_name
+      SELECT ${queueSelectFields}
       FROM queue q
-      LEFT JOIN patients p ON q.patient_id = p.id
-      LEFT JOIN users provider ON q.provider_id = provider.id
-      LEFT JOIN users student ON q.student_id = student.id
+      ${queueJoins}
       ${whereClause}
       ORDER BY 
+        CASE q.status
+          WHEN 'IN_WAITING_ROOM' THEN 1
+          WHEN 'UNDER_CONSULTATION' THEN 2
+          WHEN 'UNDER_TREATMENT' THEN 3
+          WHEN 'COMPLETED' THEN 4
+        END,
         CASE q.priority 
           WHEN 'URGENT' THEN 1
           WHEN 'HIGH' THEN 2
@@ -54,31 +161,37 @@ const getQueue = async (req, res) => {
     const queue = await query(queueQuery, queryParams);
 
     // Calculate wait times
-    const queueWithWaitTimes = queue.map(item => ({
-      ...item,
-      wait_time_minutes: item.start_time ? 
+    const queueWithWaitTimes = queue.map(item => {
+      const waitMinutes = item.start_time ?
         Math.floor((new Date(item.start_time) - new Date(item.arrival_time)) / 60000) :
-        Math.floor((new Date() - new Date(item.arrival_time)) / 60000),
-      treatment_duration_minutes: item.start_time && item.completion_time ?
-        Math.floor((new Date(item.completion_time) - new Date(item.start_time)) / 60000) :
-        null
-    }));
+        Math.floor((new Date() - new Date(item.arrival_time)) / 60000);
+
+      return {
+        ...item,
+        wait_time_minutes: Math.max(0, waitMinutes),
+        treatment_duration_minutes: item.start_time && item.completion_time ?
+          Math.floor((new Date(item.completion_time) - new Date(item.start_time)) / 60000) :
+          null
+      };
+    });
 
     // Get queue statistics
     const statsQuery = `
       SELECT 
         COUNT(*) as total_in_queue,
-        COUNT(CASE WHEN status = 'WAITING' THEN 1 END) as waiting_count,
-        COUNT(CASE WHEN status = 'IN_TREATMENT' THEN 1 END) as in_treatment_count,
-        COUNT(CASE WHEN status = 'PREPARATION' THEN 1 END) as preparation_count,
-        COUNT(CASE WHEN priority = 'URGENT' THEN 1 END) as urgent_count,
-        COUNT(CASE WHEN priority = 'HIGH' THEN 1 END) as high_priority_count,
+        COUNT(CASE WHEN q.status = 'IN_WAITING_ROOM' THEN 1 END) as waiting_count,
+        COUNT(CASE WHEN q.status = 'UNDER_CONSULTATION' THEN 1 END) as under_consultation_count,
+        COUNT(CASE WHEN q.status = 'UNDER_TREATMENT' THEN 1 END) as under_treatment_count,
+        COUNT(CASE WHEN q.status = 'COMPLETED' THEN 1 END) as completed_count,
+        COUNT(CASE WHEN q.priority = 'URGENT' THEN 1 END) as urgent_count,
+        COUNT(CASE WHEN q.priority = 'HIGH' THEN 1 END) as high_priority_count,
         AVG(TIMESTAMPDIFF(MINUTE, arrival_time, NOW())) as avg_wait_time
-      FROM queue 
-      WHERE status != 'COMPLETED'
+      FROM queue q
+      WHERE q.arrival_time >= CURDATE()
+        ${scope.clause}
     `;
 
-    const stats = await query(statsQuery);
+    const stats = await query(statsQuery, scope.params);
 
     res.json({
       success: true,
@@ -99,7 +212,18 @@ const getQueue = async (req, res) => {
 // Add patient to queue
 const addToQueue = async (req, res) => {
   try {
-    const queueData = req.body;
+    if (req.user.role !== 'RECEPTION') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only receptionists can add patients to the live clinic queue'
+      });
+    }
+
+    await cleanupCompletedQueueEntries();
+    const queueData = {
+      ...req.body,
+      status: normalizeQueueStatus(req.body.status)
+    };
 
     // Check if patient exists
     const patient = await findOne('patients', { id: queueData.patient_id, deleted_at: null });
@@ -111,9 +235,9 @@ const addToQueue = async (req, res) => {
     }
 
     // Check if patient is already in queue
-    const existingInQueue = await findOne('queue', { 
-      patient_id: queueData.patient_id, 
-      status: ['WAITING', 'IN_TREATMENT', 'PREPARATION'] 
+    const existingInQueue = await findOne('queue', {
+      patient_id: queueData.patient_id,
+      status: ['IN_WAITING_ROOM', 'UNDER_CONSULTATION', 'UNDER_TREATMENT']
     });
     
     if (existingInQueue) {
@@ -147,6 +271,7 @@ const addToQueue = async (req, res) => {
     // Add to queue
     const queueId = await insert('queue', {
       ...queueData,
+      status: QUEUE_STATUSES.includes(queueData.status) ? queueData.status : 'IN_WAITING_ROOM',
       arrival_time: new Date()
     });
 
@@ -154,17 +279,9 @@ const addToQueue = async (req, res) => {
 
     // Return created queue entry with details
     const createdQueueQuery = `
-      SELECT 
-        q.*,
-        p.patient_code,
-        CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-        TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) as patient_age,
-        provider.name as provider_name,
-        student.name as student_name
+      SELECT ${queueSelectFields}
       FROM queue q
-      LEFT JOIN patients p ON q.patient_id = p.id
-      LEFT JOIN users provider ON q.provider_id = provider.id
-      LEFT JOIN users student ON q.student_id = student.id
+      ${queueJoins}
       WHERE q.id = ?
     `;
 
@@ -188,14 +305,22 @@ const addToQueue = async (req, res) => {
 const updateQueueStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, notes, provider_id, student_id } = req.body;
+    const { notes, provider_id, student_id } = req.body;
+    const status = normalizeQueueStatus(req.body.status);
+
+    if (!QUEUE_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid queue status'
+      });
+    }
 
     // Check if queue entry exists
-    const existingQueue = await findOne('queue', { id });
+    const existingQueue = await getQueueEntryForUser(id, req.user, 'update');
     if (!existingQueue) {
-      return res.status(404).json({
+      return res.status(403).json({
         success: false,
-        message: 'Queue entry not found'
+        message: 'Queue entry not found or not accessible'
       });
     }
 
@@ -206,7 +331,7 @@ const updateQueueStatus = async (req, res) => {
     if (student_id) updateData.student_id = student_id;
 
     // Handle timestamps based on status
-    if (status === 'IN_TREATMENT' && existingQueue.status !== 'IN_TREATMENT') {
+    if (status === 'UNDER_TREATMENT' && existingQueue.status !== 'UNDER_TREATMENT') {
       updateData.start_time = new Date();
     }
     
@@ -224,17 +349,9 @@ const updateQueueStatus = async (req, res) => {
 
     // Return updated queue entry with details
     const updatedQueueQuery = `
-      SELECT 
-        q.*,
-        p.patient_code,
-        CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-        TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) as patient_age,
-        provider.name as provider_name,
-        student.name as student_name
+      SELECT ${queueSelectFields}
       FROM queue q
-      LEFT JOIN patients p ON q.patient_id = p.id
-      LEFT JOIN users provider ON q.provider_id = provider.id
-      LEFT JOIN users student ON q.student_id = student.id
+      ${queueJoins}
       WHERE q.id = ?
     `;
 
@@ -260,11 +377,11 @@ const removeFromQueue = async (req, res) => {
     const { id } = req.params;
 
     // Check if queue entry exists
-    const existingQueue = await findOne('queue', { id });
+    const existingQueue = await getQueueEntryForUser(id, req.user, 'delete');
     if (!existingQueue) {
-      return res.status(404).json({
+      return res.status(403).json({
         success: false,
-        message: 'Queue entry not found'
+        message: 'Only receptionists can delete queue entries'
       });
     }
 
@@ -289,6 +406,7 @@ const removeFromQueue = async (req, res) => {
 // Get queue statistics
 const getQueueStats = async (req, res) => {
   try {
+    await cleanupCompletedQueueEntries();
     const { period = 'today' } = req.query;
 
     let dateFilter;
@@ -306,21 +424,24 @@ const getQueueStats = async (req, res) => {
         dateFilter = 'DATE(q.arrival_time) = CURDATE()';
     }
 
+    const scope = buildQueueScope(req.user, 'q');
+
     const statsQuery = `
       SELECT 
         COUNT(*) as total_patients,
-        COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as completed,
-        COUNT(CASE WHEN status = 'WAITING' THEN 1 END) as waiting,
-        COUNT(CASE WHEN status = 'IN_TREATMENT' THEN 1 END) as in_treatment,
-        COUNT(CASE WHEN status = 'PREPARATION' THEN 1 END) as preparation,
+        COUNT(CASE WHEN q.status = 'COMPLETED' THEN 1 END) as completed,
+        COUNT(CASE WHEN q.status = 'IN_WAITING_ROOM' THEN 1 END) as waiting,
+        COUNT(CASE WHEN q.status = 'UNDER_CONSULTATION' THEN 1 END) as under_consultation,
+        COUNT(CASE WHEN q.status = 'UNDER_TREATMENT' THEN 1 END) as under_treatment,
         AVG(TIMESTAMPDIFF(MINUTE, arrival_time, COALESCE(completion_time, NOW()))) as avg_total_time,
         AVG(TIMESTAMPDIFF(MINUTE, arrival_time, start_time)) as avg_wait_time,
         AVG(TIMESTAMPDIFF(MINUTE, start_time, completion_time)) as avg_treatment_time
       FROM queue q
       WHERE ${dateFilter}
+        ${scope.clause}
     `;
 
-    const stats = await query(statsQuery);
+    const stats = await query(statsQuery, scope.params);
 
     // Hourly queue volume
     const hourlyStatsQuery = `
@@ -333,7 +454,10 @@ const getQueueStats = async (req, res) => {
       ORDER BY hour ASC
     `;
 
-    const hourlyStats = await query(hourlyStatsQuery);
+    const hourlyStats = await query(
+      hourlyStatsQuery.replace('FROM queue ', 'FROM queue q ').replace(`WHERE ${dateFilter}`, `WHERE ${dateFilter} ${scope.clause}`),
+      scope.params
+    );
 
     // Provider workload
     const providerStatsQuery = `
@@ -344,11 +468,12 @@ const getQueueStats = async (req, res) => {
       FROM queue q
       LEFT JOIN users u ON q.provider_id = u.id
       WHERE ${dateFilter} AND q.provider_id IS NOT NULL
+        ${scope.clause}
       GROUP BY q.provider_id, u.name
       ORDER BY patient_count DESC
     `;
 
-    const providerStats = await query(providerStatsQuery);
+    const providerStats = await query(providerStatsQuery, scope.params);
 
     res.json({
       success: true,

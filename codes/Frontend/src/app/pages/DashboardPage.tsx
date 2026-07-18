@@ -1,20 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Card, Badge, Button, RefreshButton } from '../components/UI';
-import { Users, Clock, Calendar, AlertCircle, Activity, CheckCircle2 } from 'lucide-react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  LineChart,
-  Line,
-} from 'recharts';
+import { Card, Badge, RefreshButton } from '../components/UI';
+import { Users, Clock, Calendar, AlertCircle, Activity, ClipboardList } from 'lucide-react';
 import { apiService } from '../services/api';
 import { toast } from 'sonner';
+
+const ASSIGNMENT_SCOPED_ROLES = ['ORTHODONTIST', 'DENTAL_SURGEON', 'STUDENT'];
 
 const StatCard = ({ title, value, icon: Icon, className = '' }: { title: string; value: string | number; icon: any; className?: string }) => (
   <Card className={`p-6 ${className}`}>
@@ -36,11 +27,10 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [patientsStats, setPatientsStats] = useState<any>(null);
   const [visitsToday, setVisitsToday] = useState<any[]>([]);
-  const [visitsStats, setVisitsStats] = useState<any>(null);
+  const [upcomingVisits, setUpcomingVisits] = useState<any[]>([]);
   const [queueStats, setQueueStats] = useState<any>(null);
   const [caseStats, setCaseStats] = useState<any>(null);
   const [inventoryStats, setInventoryStats] = useState<any>(null);
-  const [adminDashboard, setAdminDashboard] = useState<any>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadDashboard = async (manual = false) => {
@@ -60,23 +50,22 @@ export function DashboardPage() {
     };
 
     try {
-      const [p, vt, vs, q, c, i, admin] = await Promise.all([
+      const assignmentScopedRole = ASSIGNMENT_SCOPED_ROLES.includes(String(user?.role || ''));
+      const [p, today, upcoming, q, c, i] = await Promise.all([
         safe<any>(apiService.patients.getStats()),
         safe<any>(apiService.visits.getToday()),
-        safe<any>(apiService.visits.getStats()),
-        safe<any>(apiService.queue.getList()),
+        safe<any>(apiService.visits.getUpcoming({ limit: 6 })),
+        safe<any>(apiService.queue.getList(assignmentScopedRole ? { scope: 'assigned' } : undefined)),
         safe<any>(apiService.cases.getStats()),
         safe<any>(apiService.inventory.getStats()),
-        user?.role === 'ADMIN' ? safe<any>(apiService.reports.dashboard('month')) : Promise.resolve(null),
       ]);
 
       setPatientsStats(p);
-      setVisitsToday(Array.isArray(vt) ? vt : []);
-      setVisitsStats(vs);
+      setVisitsToday(Array.isArray(today) ? today : []);
+      setUpcomingVisits(Array.isArray(upcoming) ? upcoming : []);
       setQueueStats(q?.statistics || null);
       setCaseStats(c?.overview || null);
       setInventoryStats(i?.overview || null);
-      setAdminDashboard(admin);
       succeeded = true;
     } catch (err: any) {
       setError(err?.message || 'Failed to load dashboard');
@@ -97,31 +86,41 @@ export function DashboardPage() {
 
   useEffect(() => {
     loadDashboard();
-  }, [user?.role]);
+  }, [user?.role, user?.id]);
 
-  const visitTrend = useMemo(() => {
-    const daily = visitsStats?.daily_visits || [];
-    return daily.slice(-7).map((d: any) => ({ name: String(d.date).slice(5), count: Number(d.visit_count || 0) }));
-  }, [visitsStats]);
+  const patientOverview = patientsStats?.overview || {};
+  const assignmentScoped = ASSIGNMENT_SCOPED_ROLES.includes(String(user?.role || ''));
+  const actualTodayVisits = useMemo(
+    () => visitsToday.filter((visit) => visit.status === 'COMPLETED' || visit.status === 'DID_NOT_ATTEND').length,
+    [visitsToday]
+  );
+  const inventoryAlertCount = Number(inventoryStats?.out_of_stock || 0) + Number(inventoryStats?.low_stock || 0);
 
-  const adminPatientTrend = useMemo(() => {
-    const rows = adminDashboard?.patient_trends || [];
-    return rows.slice(-14).map((d: any) => ({ name: String(d.date).slice(5), count: Number(d.new_patients || 0) }));
-  }, [adminDashboard]);
+  const snapshotRows = useMemo(() => {
+    const role = String(user?.role || '');
 
-  const upcoming = useMemo(() => {
-    return visitsToday
-      .filter((v) => v.status === 'SCHEDULED')
-      .sort((a, b) => String(a.visit_date).localeCompare(String(b.visit_date)))
-      .slice(0, 6);
-  }, [visitsToday]);
+    if (role === 'ORTHODONTIST' || role === 'DENTAL_SURGEON' || role === 'STUDENT') {
+      return [
+        { label: 'Student Cases', value: caseStats?.total_cases ?? 0 },
+        { label: 'Pending Tasks', value: caseStats?.pending_tasks ?? 0 },
+        { label: 'Completed Tasks', value: caseStats?.completed_tasks ?? 0 },
+        { label: 'Overdue Tasks', value: caseStats?.overdue_tasks ?? 0 },
+      ];
+    }
+
+    return [
+      { label: assignmentScoped ? 'Active Assigned Patients' : 'Active Patients', value: patientOverview.active_patients ?? 0 },
+      { label: 'Under Consultation', value: queueStats?.under_consultation_count ?? 0 },
+      { label: 'Under Treatment Queue', value: queueStats?.under_treatment_count ?? 0 },
+      { label: 'Upcoming Appointments', value: upcomingVisits.length },
+    ];
+  }, [assignmentScoped, caseStats, patientOverview.active_patients, queueStats, upcomingVisits.length, user?.role]);
 
   return (
     <div className="space-y-8">
       <div className="flex justify-between items-center">
         <header>
           <h2 className="text-2xl font-bold text-gray-900">Welcome back, {user?.name}</h2>
-          <p className="text-gray-500">Live operational dashboard.</p>
         </header>
         <RefreshButton onClick={() => loadDashboard(true)} loading={refreshing} />
       </div>
@@ -129,74 +128,48 @@ export function DashboardPage() {
       {error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard title="Total Patients" value={patientsStats?.total_patients ?? 0} icon={Users} />
-        <StatCard title="Today's Visits" value={visitsToday.length} icon={Calendar} />
+        <StatCard title={assignmentScoped ? 'Assigned Patients' : 'Total Patients'} value={patientOverview.total_patients ?? 0} icon={Users} />
+        <StatCard title="Today's Visits" value={actualTodayVisits} icon={Calendar} />
         <StatCard title="Queue Waiting" value={queueStats?.waiting_count ?? 0} icon={Clock} />
-        <StatCard title="Inventory Alerts" value={inventoryStats?.low_stock ?? 0} icon={AlertCircle} />
+        <StatCard title="Inventory Alerts" value={inventoryAlertCount} icon={AlertCircle} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2 p-6">
-          <h4 className="font-bold mb-4">Visit Trend</h4>
-          <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={visitTrend.length ? visitTrend : adminPatientTrend}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                <YAxis axisLine={false} tickLine={false} />
-                <Tooltip />
-                <Bar dataKey="count" fill="#2563eb" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <h4 className="font-bold mb-4">Upcoming Appointments</h4>
+          <div className="space-y-3">
+            {upcomingVisits.length === 0 && !loading && <p className="text-sm text-gray-500">No upcoming appointments.</p>}
+            {upcomingVisits.map((visit: any) => (
+              <div key={visit.id} className="flex items-center justify-between gap-4 p-3 border border-gray-100 rounded-lg">
+                <div>
+                  <p className="font-medium text-gray-900">{visit.patient_name || 'Patient'} • {visit.procedure_type || 'Visit'}</p>
+                  <p className="text-xs text-gray-500">{String(visit.visit_date).slice(0, 16).replace('T', ' ')} • {visit.provider_name || 'Unassigned provider'}</p>
+                </div>
+                <Badge variant="blue">{visit.status}</Badge>
+              </div>
+            ))}
           </div>
         </Card>
 
         <Card className="p-6">
           <h4 className="font-bold mb-4">Operational Snapshot</h4>
           <div className="space-y-3 text-sm">
-            <div className="flex justify-between p-2 border border-gray-100 rounded"><span>Active Patients</span><strong>{patientsStats?.active_patients ?? 0}</strong></div>
-            <div className="flex justify-between p-2 border border-gray-100 rounded"><span>In Treatment Queue</span><strong>{queueStats?.in_treatment_count ?? 0}</strong></div>
-            <div className="flex justify-between p-2 border border-gray-100 rounded"><span>Pending Cases</span><strong>{caseStats?.pending_cases ?? 0}</strong></div>
-            <div className="flex justify-between p-2 border border-gray-100 rounded"><span>Verified Cases</span><strong>{caseStats?.verified_cases ?? 0}</strong></div>
+            {snapshotRows.map((row) => (
+              <div key={row.label} className="flex justify-between p-2 border border-gray-100 rounded">
+                <span>{row.label}</span>
+                <strong>{row.value}</strong>
+              </div>
+            ))}
           </div>
         </Card>
       </div>
 
-      <Card className="p-6">
-        <h4 className="font-bold mb-4">Upcoming Appointments</h4>
-        <div className="space-y-3">
-          {upcoming.length === 0 && !loading && <p className="text-sm text-gray-500">No upcoming appointments.</p>}
-          {upcoming.map((v: any) => (
-            <div key={v.id} className="flex items-center justify-between p-3 border border-gray-100 rounded-lg">
-              <div>
-                <p className="font-medium text-gray-900">{v.patient_name || 'Patient'} • {v.procedure_type || 'Visit'}</p>
-                <p className="text-xs text-gray-500">{String(v.visit_date).slice(0, 16).replace('T', ' ')} • {v.provider_name || 'Unassigned provider'}</p>
-              </div>
-              <Badge variant="blue">{v.status}</Badge>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {user?.role === 'ADMIN' && (
-        <Card className="p-6">
-          <h4 className="font-bold mb-4">Admin Trend (New Patients)</h4>
-          <div className="h-[240px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={adminPatientTrend}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                <YAxis axisLine={false} tickLine={false} />
-                <Tooltip />
-                <Line type="monotone" dataKey="count" stroke="#10b981" strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-      )}
-
       {loading && <p className="text-sm text-gray-500 flex items-center gap-2"><Activity className="w-4 h-4" /> Loading dashboard data...</p>}
-      {!loading && visitsToday.length === 0 && <p className="text-sm text-gray-500">No visit records available for today.</p>}
+      {!loading && actualTodayVisits === 0 && (
+        <p className="text-sm text-gray-500 flex items-center gap-2">
+          <ClipboardList className="w-4 h-4" /> No completed visit outcomes recorded for today.
+        </p>
+      )}
     </div>
   );
 }

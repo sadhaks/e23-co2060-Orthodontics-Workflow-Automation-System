@@ -6,8 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "bootstrap-db": "node scripts/bootstrap-database.js",
     "migrate": "node scripts/migrate.js",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed.js",
+    "ensure-admin": "node scripts/ensure-admin.js",
+    "reset-admin-password": "node scripts/ensure-admin.js --reset-password"
   },
   "keywords": [
     "orthodontics",
@@ -19,6 +22,7 @@
   "author": "University Dental Hospital",
   "license": "MIT",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1056.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
@@ -30,13 +34,14 @@
     "joi": "^17.11.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.1.1",
     "mysql2": "^3.6.5",
     "nodemailer": "^8.0.1",
     "open": "^8.4.2",
+    "playwright": "^1.59.1",
     "uuid": "^9.0.1"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=20.0.0"
   }
 }

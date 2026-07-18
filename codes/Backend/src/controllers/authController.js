@@ -8,6 +8,10 @@ const { findOne, findMany, insert, update, remove } = require('../config/databas
 const { logAuditEvent } = require('../middleware/errorHandler');
 const SESSION_TIMEOUT_SECONDS = Number(process.env.SESSION_TIMEOUT_SECONDS || 3600);
 
+const isRefreshTokenVerificationError = (error) => {
+  return error?.message === 'Invalid or expired refresh token';
+};
+
 const issueSessionTokens = async (user) => {
   const payload = {
     userId: user.id,
@@ -241,8 +245,17 @@ const refreshToken = async (req, res) => {
       });
     }
 
-    // Verify refresh token
-    const decoded = verifyRefreshToken(refreshToken);
+    // Verify refresh token. Invalid/expired refresh JWTs are normal auth failures,
+    // not server errors, because clients may hold stale tokens in localStorage.
+    let decoded;
+    try {
+      decoded = verifyRefreshToken(refreshToken);
+    } catch (error) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired refresh token'
+      });
+    }
 
     // Find user
     const user = await findOne('users', { id: decoded.userId, status: 'ACTIVE' });
@@ -342,6 +355,13 @@ const refreshToken = async (req, res) => {
       }
     });
   } catch (error) {
+    if (isRefreshTokenVerificationError(error)) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired refresh token'
+      });
+    }
+
     console.error('Token refresh error:', error);
     res.status(500).json({
       success: false,

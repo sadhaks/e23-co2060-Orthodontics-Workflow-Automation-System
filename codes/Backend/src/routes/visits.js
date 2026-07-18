@@ -22,6 +22,12 @@ router.get('/today',
   asyncHandler(visitController.getTodayVisits)
 );
 
+// GET /api/visits/upcoming - Get upcoming scheduled appointments
+router.get('/upcoming',
+  requirePermission(OBJECT_TYPES.PATIENT_APPOINTMENTS, PERMISSIONS.READ),
+  asyncHandler(visitController.getUpcomingVisits)
+);
+
 // GET /api/visits/stats - Get visit statistics
 router.get('/stats', 
   requirePermission(OBJECT_TYPES.PATIENT_APPOINTMENTS, PERMISSIONS.READ),

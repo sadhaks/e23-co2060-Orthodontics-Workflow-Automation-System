@@ -29,6 +29,13 @@ router.get('/stats',
   asyncHandler(caseController.getCaseStats)
 );
 
+// GET /api/cases/students/:studentId - Get cases for a specific student
+router.get('/students/:studentId',
+  requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.READ),
+  validate(schemas.pagination, 'query'),
+  asyncHandler(caseController.getStudentCases)
+);
+
 // GET /api/cases/:id - Get single case by ID
 router.get('/:id', 
   requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.READ, { resolvePatientId: resolvePatientIdFromCaseId }),
@@ -49,17 +56,51 @@ router.put('/:id',
   asyncHandler(caseController.updateCase)
 );
 
+// POST /api/cases/:id/progress - Add student progress update
+router.post('/:id/progress',
+  requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.UPDATE, { resolvePatientId: resolvePatientIdFromCaseId }),
+  validate(schemas.createCaseProgress),
+  asyncHandler(caseController.addCaseProgress)
+);
+
+// POST /api/cases/:id/reviews - Add supervisor review
+router.post('/:id/reviews',
+  requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.APPROVE, { resolvePatientId: resolvePatientIdFromCaseId }),
+  validate(schemas.createCaseReview),
+  asyncHandler(caseController.addCaseReview)
+);
+
+// POST /api/cases/:id/tasks - Supervisor assigns a task to student
+router.post('/:id/tasks',
+  requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.APPROVE, { resolvePatientId: resolvePatientIdFromCaseId }),
+  validate(schemas.createCaseTask),
+  asyncHandler(caseController.assignCaseTask)
+);
+
+// PUT /api/cases/:id/tasks/:taskId - Student updates task progress
+router.put('/:id/tasks/:taskId',
+  requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.UPDATE, { resolvePatientId: resolvePatientIdFromCaseId }),
+  validate(schemas.updateCaseTask),
+  asyncHandler(caseController.updateCaseTask)
+);
+
+// POST /api/cases/:id/tasks/:taskId/review - Supervisor reviews completed task
+router.post('/:id/tasks/:taskId/review',
+  requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.APPROVE, { resolvePatientId: resolvePatientIdFromCaseId }),
+  validate(schemas.reviewCaseTask),
+  asyncHandler(caseController.reviewCaseTask)
+);
+
+// DELETE /api/cases/:id/tasks/:taskId - Supervisor deletes a task
+router.delete('/:id/tasks/:taskId',
+  requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.DELETE, { resolvePatientId: resolvePatientIdFromCaseId }),
+  asyncHandler(caseController.deleteCaseTask)
+);
+
 // DELETE /api/cases/:id - Delete case
 router.delete('/:id', 
   requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.DELETE, { resolvePatientId: resolvePatientIdFromCaseId }),
   asyncHandler(caseController.deleteCase)
-);
-
-// GET /api/students/:studentId/cases - Get cases for a specific student
-router.get('/students/:studentId', 
-  requirePermission(OBJECT_TYPES.PATIENT_TREATMENT, PERMISSIONS.READ),
-  validate(schemas.pagination, 'query'),
-  asyncHandler(caseController.getStudentCases)
 );
 
 module.exports = router;

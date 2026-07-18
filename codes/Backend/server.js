@@ -34,6 +34,13 @@ const reportRoutes = require('./src/routes/reports');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+let server;
+app.set('trust proxy', 1);
+const isQuietPollingRequest = (req, res) => (
+  req.method === 'GET' &&
+  req.originalUrl === '/api/patients/assignment-requests/pending' &&
+  res.statusCode < 400
+);
 
 // Security middleware
 app.use(helmet({
@@ -63,13 +70,22 @@ app.use(express.static('public'));
 
 // Development logging
 if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
+  app.use(morgan('dev', { skip: isQuietPollingRequest }));
 }
 
 // Static file serving for uploads
 app.use('/uploads', express.static(path.join(__dirname, 'src/uploads')));
 
 // Health check endpoint
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'OrthoFlow API is running',
+    health: '/health',
+    api: '/api'
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({
     success: true,
@@ -113,7 +129,7 @@ app.get('/api', (req, res) => {
       users: '/api/users',
       reports: '/api/reports'
     },
-    documentation: 'https://github.com/your-repo/orthoflow-backend'
+    documentation: 'https://github.com/cepdnaclk/e23-co2060-Orthodontics-Workflow-Automation-System/blob/main/codes/Backend/README.md'
   });
 });
 
@@ -142,20 +158,28 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
+const shutdown = (signal) => {
   stopAuditLogRetentionJob();
   stopAutoReminderJob();
-  console.log('SIGTERM received. Shutting down gracefully...');
-  process.exit(0);
-});
+  console.log(`${signal} received. Shutting down gracefully...`);
 
-process.on('SIGINT', () => {
-  stopAuditLogRetentionJob();
-  stopAutoReminderJob();
-  console.log('SIGINT received. Shutting down gracefully...');
-  process.exit(0);
-});
+  if (!server) {
+    process.exit(0);
+    return;
+  }
+
+  server.close(() => {
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    process.exit(0);
+  }, 10000).unref();
+};
+
+// Graceful shutdown
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Start server
 async function startServer() {
@@ -168,7 +192,7 @@ async function startServer() {
     
     const PORT = process.env.PORT || 3000;
     
-    app.listen(PORT, () => {
+    server = app.listen(PORT, () => {
       console.log(`
 🚀 OrthoFlow Backend Server Started Successfully!
 📍 Server: http://localhost:${PORT}

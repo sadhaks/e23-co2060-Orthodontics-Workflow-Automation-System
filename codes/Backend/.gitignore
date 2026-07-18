@@ -7,6 +7,7 @@ yarn-error.log*
 # Logs
 logs
 *.log
+*.out
 
 # Runtime data
 pids
@@ -33,6 +34,15 @@ jspm_packages/
 
 # Output of 'npm pack'
 *.tgz
+
+# Environment files
+.env
+.env.*
+*.env
+.env.example
+.env.sample
+.env.template
+!.env.example
 
 # Yarn Integrity file
 .yarn-integrity
@@ -77,14 +87,18 @@ src/uploads/*
 .DS_Store
 .DS_Store?
 ._*
+.AppleDouble
+.LSOverride
 .Spotlight-V100
 .Trashes
+.fseventsd
 ehthumbs.db
 Thumbs.db
 
 # IDE files
 .vscode/
 .idea/
+.history/
 *.swp
 *.swo
 *~
@@ -100,3 +114,4 @@ coverage/
 # Temporary files
 tmp/
 temp/
+*.tmp

@@ -7,9 +7,30 @@ const {
 } = require('../config/database');
 const { logAuditEvent } = require('../middleware/errorHandler');
 const { hasPermission, OBJECT_TYPES, PERMISSIONS } = require('../middleware/accessControl');
+const { ensureStudentCaseForAssignment } = require('../services/studentCaseService');
 
 const ASSIGNMENT_SCOPED_ROLES = new Set(['ORTHODONTIST', 'DENTAL_SURGEON', 'STUDENT']);
 const APPROVAL_REQUIRED_ASSIGNMENT_ROLES = new Set(['ORTHODONTIST', 'DENTAL_SURGEON']);
+
+const buildPatientAssignmentScope = (user, alias = 'p') => {
+  if (!ASSIGNMENT_SCOPED_ROLES.has(user.role)) {
+    return { clause: '', params: [] };
+  }
+
+  return {
+    clause: `
+      EXISTS (
+        SELECT 1
+        FROM patient_assignments pa_scope
+        WHERE pa_scope.patient_id = ${alias}.id
+          AND pa_scope.user_id = ?
+          AND pa_scope.assignment_role = ?
+          AND pa_scope.active = TRUE
+      )
+    `,
+    params: [user.id, user.role]
+  };
+};
 
 const SORT_FIELD_MAP = {
   id: 'p.id',
@@ -19,6 +40,57 @@ const SORT_FIELD_MAP = {
   last_name: 'p.last_name',
   patient_code: 'p.patient_code',
   status: 'p.status'
+};
+
+const SRI_LANKA_TIME_ZONE = 'Asia/Colombo';
+
+const parseDateTimeForSriLanka = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const dateTimeLike = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(raw);
+  const parsed = new Date(dateTimeLike && !hasExplicitZone ? `${raw.replace(' ', 'T')}Z` : raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatSriLankaDateTime = (value, includeSeconds = false) => {
+  const parsed = parseDateTimeForSriLanka(value);
+  if (!parsed) return value ? String(value) : 'N/A';
+
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: SRI_LANKA_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: includeSeconds ? '2-digit' : undefined,
+    hour12: false
+  }).formatToParts(parsed);
+
+  const getPart = (type) => parts.find((part) => part.type === type)?.value || '';
+  const dateTime = `${getPart('year')}-${getPart('month')}-${getPart('day')} ${getPart('hour')}:${getPart('minute')}`;
+  return includeSeconds ? `${dateTime}:${getPart('second')}` : dateTime;
+};
+
+const formatDateOnlyValue = (value) => {
+  if (!value) return 'N/A';
+  const raw = String(value).trim();
+  const direct = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (direct) return direct[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return parsed.toISOString().slice(0, 10);
+};
+
+const formatDentalChartEntryAnnotatedAt = (row) => {
+  if (row?.updated_at) return formatSriLankaDateTime(row.updated_at, true);
+  if (row?.event_date) return formatDateOnlyValue(row.event_date);
+  return '-';
 };
 
 // Generate unique patient code
@@ -53,6 +125,12 @@ const normalizeRegistrationDateTime = (value) => {
     return `${dateOnly[1]} 00:00:00`;
   }
 
+  const slashDateOnly = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (slashDateOnly) {
+    const [, day, month, year] = slashDateOnly;
+    return `${year}-${month}-${day} 00:00:00`;
+  }
+
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) return null;
   const year = parsed.getFullYear();
@@ -62,6 +140,24 @@ const normalizeRegistrationDateTime = (value) => {
   const minute = String(parsed.getMinutes()).padStart(2, '0');
   const second = String(parsed.getSeconds()).padStart(2, '0');
   return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+};
+
+const normalizeDateOnlyInput = (value) => {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return raw;
+  }
+
+  const slash = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (slash) {
+    const [, day, month, year] = slash;
+    return `${year}-${month}-${day}`;
+  }
+
+  return null;
 };
 
 const normalizeDentalChartVersionRow = (row) => {
@@ -215,7 +311,7 @@ const buildDentalChartVersionPdf = ({ patient, version }) => {
   lines.push(`Patient Name: ${patientName}`);
   lines.push(`Version: ${version.version_label || 'Annotated Chart Version'}`);
   lines.push(`Annotated By: ${version.annotated_by_name || 'Unknown'} (User ID: ${version.annotated_by || 'N/A'})`);
-  lines.push(`Saved At: ${version.created_at ? String(version.created_at).slice(0, 19).replace('T', ' ') : 'N/A'}`);
+  lines.push(`Saved At: ${formatSriLankaDateTime(version.created_at, true)}`);
   lines.push(`Entry Count: ${version.entry_count || 0}`);
   lines.push('');
   lines.push('Annotated Teeth');
@@ -234,10 +330,10 @@ const buildDentalChartVersionPdf = ({ patient, version }) => {
       ].filter(Boolean).join(', ') || 'Healthy';
 
       lines.push(`${index + 1}. Tooth ${getDentalChartVersionToothLabel(row)} (${row.dentition || '-'} ${row.notation_x || '-'}/${row.notation_y || '-'})`);
-      lines.push(`   Status: ${row.status || 'HEALTHY'} | Flags: ${flags}`);
+      lines.push(`   Status: ${flags}`);
       lines.push(`   Pathology: ${row.pathology || '-'}`);
       lines.push(`   Treatment: ${row.treatment || '-'}`);
-      lines.push(`   Annotated Date: ${row.event_date ? String(row.event_date).slice(0, 19).replace('T', ' ') : '-'}`);
+      lines.push(`   Annotated Date: ${formatDentalChartEntryAnnotatedAt(row)}`);
       lines.push('');
     });
   }
@@ -306,7 +402,7 @@ const buildDentalChartVersionHtml = ({ patient, version }) => {
   const entries = Array.isArray(version.snapshot_data)
     ? [...version.snapshot_data].sort(compareDentalChartVersionRows)
     : [];
-  const createdAt = version.created_at ? String(version.created_at).slice(0, 19).replace('T', ' ') : 'N/A';
+  const createdAt = formatSriLankaDateTime(version.created_at, true);
 
   const cards = entries.length
     ? entries.map((row) => {
@@ -322,11 +418,10 @@ const buildDentalChartVersionHtml = ({ patient, version }) => {
           <div class="notation"><span class="x">${escapeHtml(row.notation_x || '-')}</span><span class="slash">/</span><span class="y">${escapeHtml(row.notation_y || '-')}</span></div>
           <div class="tooth-icon">🦷</div>
           <div class="meta">Tooth: ${escapeHtml(getDentalChartVersionToothLabel(row))}</div>
-          <div class="meta">Status: ${escapeHtml(row.status || 'HEALTHY')}</div>
           <div class="flags">${escapeHtml(flags)}</div>
           <div class="text">Pathology: ${escapeHtml(row.pathology || '-')}</div>
           <div class="text">Treatment: ${escapeHtml(row.treatment || '-')}</div>
-          <div class="text">Annotated Date: ${escapeHtml(row.event_date ? String(row.event_date).slice(0, 19).replace('T', ' ') : '-')}</div>
+          <div class="text">Annotated Date: ${escapeHtml(formatDentalChartEntryAnnotatedAt(row))}</div>
         </div>
       </div>`;
     }).join('')
@@ -409,19 +504,7 @@ const buildDentalChartVersionVisualPdf = async ({ patient, version }) => {
 
 const formatDateTime = (value) => {
   if (!value) return 'N/A';
-  const raw = String(value).trim();
-  const direct = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::\d{2})?/);
-  if (direct) {
-    return `${direct[1]} ${direct[2]}`;
-  }
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return raw;
-  const year = parsed.getFullYear();
-  const month = String(parsed.getMonth() + 1).padStart(2, '0');
-  const day = String(parsed.getDate()).padStart(2, '0');
-  const hour = String(parsed.getHours()).padStart(2, '0');
-  const minute = String(parsed.getMinutes()).padStart(2, '0');
-  return `${year}-${month}-${day} ${hour}:${minute}`;
+  return formatSriLankaDateTime(value);
 };
 
 const formatDateOnly = (value) => {
@@ -499,10 +582,10 @@ const buildPatientRecordExportPdf = ({ patient, history, dentalVersions, diagnos
             entry.is_treated ? 'Treated' : null,
             entry.is_missing ? 'Missing' : null
           ].filter(Boolean).join(', ') || 'Healthy';
-          lines.push(`   ${entryIndex + 1}. Tooth ${getDentalChartVersionToothLabel(entry)} | Status: ${entry.status || 'HEALTHY'} | Flags: ${flags}`);
+          lines.push(`   ${entryIndex + 1}. Tooth ${getDentalChartVersionToothLabel(entry)} | Status: ${flags}`);
           lines.push(`      Pathology: ${stringifyRecordValue(entry.pathology)}`);
           lines.push(`      Treatment: ${stringifyRecordValue(entry.treatment)}`);
-          lines.push(`      Annotated Date: ${formatDateTime(entry.event_date)}`);
+          lines.push(`      Annotated Date: ${formatDentalChartEntryAnnotatedAt(entry)}`);
         });
       }
       lines.push('');
@@ -576,11 +659,10 @@ const buildPatientRecordExportHtml = ({ patient, history, dentalVersions, diagno
                 <div class="notation"><span class="x">${escapeHtml(row.notation_x || '-')}</span><span class="slash">/</span><span class="y">${escapeHtml(row.notation_y || '-')}</span></div>
                 <div class="tooth-icon">🦷</div>
                 <div class="meta">Tooth: ${escapeHtml(getDentalChartVersionToothLabel(row))}</div>
-                <div class="meta">Status: ${escapeHtml(row.status || 'HEALTHY')}</div>
                 <div class="flags">${escapeHtml(flags)}</div>
                 <div class="text">Pathology: ${escapeHtml(stringifyRecordValue(row.pathology))}</div>
                 <div class="text">Treatment: ${escapeHtml(stringifyRecordValue(row.treatment))}</div>
-                <div class="text">Annotated Date: ${escapeHtml(formatDateTime(row.event_date))}</div>
+                <div class="text">Annotated Date: ${escapeHtml(formatDentalChartEntryAnnotatedAt(row))}</div>
               </div>
             </div>`;
         }).join('')
@@ -851,18 +933,9 @@ const getPatients = async (req, res) => {
     }
 
     if (ASSIGNMENT_SCOPED_ROLES.has(req.user.role)) {
-      whereClauses.push(`
-        EXISTS (
-          SELECT 1
-          FROM patient_assignments pa_scope
-          WHERE pa_scope.patient_id = p.id
-            AND pa_scope.user_id = ?
-            AND pa_scope.assignment_role = ?
-            AND pa_scope.active = TRUE
-          LIMIT 1
-        )
-      `);
-      whereValues.push(req.user.id, req.user.role);
+      const scope = buildPatientAssignmentScope(req.user, 'p');
+      whereClauses.push(scope.clause);
+      whereValues.push(...scope.params);
     }
 
     const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -952,7 +1025,7 @@ const getPatients = async (req, res) => {
     const patientsWithStats = await Promise.all(
       patients.map(async (patient) => {
         const [visitCount, lastVisit] = await Promise.all([
-          query('SELECT COUNT(*) as count FROM visits WHERE patient_id = ? AND status = "COMPLETED"', [patient.id]),
+          query("SELECT COUNT(*) as count FROM visits WHERE patient_id = ? AND status = 'COMPLETED'", [patient.id]),
           query('SELECT visit_date FROM visits WHERE patient_id = ? ORDER BY visit_date DESC LIMIT 1', [patient.id])
         ]);
 
@@ -1003,7 +1076,9 @@ const getPatientById = async (req, res) => {
     const canReadDocuments = hasPermission(req.user.role, OBJECT_TYPES.PATIENT_RADIOGRAPHS, PERMISSIONS.READ);
     const canReadNotes = hasPermission(req.user.role, OBJECT_TYPES.PATIENT_NOTES, PERMISSIONS.READ);
 
-    const [visits, documents, clinicalNotes, cases, assignments] = await Promise.all([
+      const canReadPrivateCases = req.user.role === 'ADMIN';
+
+      const [visits, documents, clinicalNotes, cases, assignments] = await Promise.all([
       query(`
         SELECT v.*, u.name as provider_name 
         FROM visits v 
@@ -1030,16 +1105,18 @@ const getPatientById = async (req, res) => {
             ORDER BY cn.created_at DESC
           `, [id])
         : Promise.resolve([]),
-      query(`
-        SELECT c.*, 
-               s.name as student_name, 
-               sup.name as supervisor_name 
-        FROM cases c 
-        LEFT JOIN users s ON c.student_id = s.id 
-        LEFT JOIN users sup ON c.supervisor_id = sup.id 
-        WHERE c.patient_id = ? 
-        ORDER BY c.created_at DESC
-      `, [id]),
+        canReadPrivateCases
+          ? query(`
+              SELECT c.*,
+                     s.name as student_name,
+                     sup.name as supervisor_name
+              FROM cases c
+              LEFT JOIN users s ON c.student_id = s.id
+              LEFT JOIN users sup ON c.supervisor_id = sup.id
+              WHERE c.patient_id = ?
+              ORDER BY c.created_at DESC
+            `, [id])
+          : Promise.resolve([]),
       query(
         `SELECT pa.id, pa.patient_id, pa.user_id, pa.assignment_role, pa.active, pa.created_at,
                 u.name AS user_name, u.email AS user_email
@@ -1096,6 +1173,16 @@ const createPatient = async (req, res) => {
         });
       }
       patientData.date_of_birth = derivedDob;
+    }
+    if (patientData.date_of_birth) {
+      const normalizedDob = normalizeDateOnlyInput(patientData.date_of_birth);
+      if (!normalizedDob) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid date_of_birth provided. Use DD/MM/YYYY or YYYY-MM-DD.'
+        });
+      }
+      patientData.date_of_birth = normalizedDob;
     }
     delete patientData.age;
 
@@ -1185,6 +1272,16 @@ const updatePatient = async (req, res) => {
         });
       }
       updateData.date_of_birth = derivedDob;
+    }
+    if (updateData.date_of_birth) {
+      const normalizedDob = normalizeDateOnlyInput(updateData.date_of_birth);
+      if (!normalizedDob) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid date_of_birth provided. Use DD/MM/YYYY or YYYY-MM-DD.'
+        });
+      }
+      updateData.date_of_birth = normalizedDob;
     }
     delete updateData.age;
 
@@ -1289,8 +1386,8 @@ const deletePatient = async (req, res) => {
     // Keep the safeguard for any future non-admin delete flows.
     if (req.user.role !== 'ADMIN') {
       const [activeCases, upcomingVisits] = await Promise.all([
-        query('SELECT COUNT(*) as count FROM cases WHERE patient_id = ? AND status IN ("ASSIGNED", "PENDING_VERIFICATION")', [id]),
-        query('SELECT COUNT(*) as count FROM visits WHERE patient_id = ? AND visit_date > NOW() AND status != "CANCELLED"', [id])
+        query("SELECT COUNT(*) as count FROM cases WHERE patient_id = ? AND status IN ('ASSIGNED', 'PENDING_VERIFICATION')", [id]),
+        query("SELECT COUNT(*) as count FROM visits WHERE patient_id = ? AND visit_date > NOW() AND status != 'CANCELLED'", [id])
       ]);
 
       if (activeCases[0].count > 0 || upcomingVisits[0].count > 0) {
@@ -1362,6 +1459,7 @@ const reactivatePatient = async (req, res) => {
 // Get patient statistics
 const getPatientStats = async (req, res) => {
   try {
+    const scope = buildPatientAssignmentScope(req.user, 'p');
     const stats = await query(`
       SELECT 
         COUNT(*) as total_patients,
@@ -1373,21 +1471,23 @@ const getPatientStats = async (req, res) => {
         COUNT(CASE WHEN gender = 'FEMALE' THEN 1 END) as female_patients,
         COUNT(CASE WHEN gender = 'OTHER' THEN 1 END) as other_gender_patients,
         AVG(TIMESTAMPDIFF(YEAR, date_of_birth, CURDATE())) as average_age
-      FROM patients 
+      FROM patients p
       WHERE deleted_at IS NULL
-    `);
+        ${scope.clause ? `AND ${scope.clause}` : ''}
+    `, scope.params);
 
     // Monthly new patients (last 12 months)
     const monthlyStats = await query(`
       SELECT 
         DATE_FORMAT(created_at, '%Y-%m') as month,
         COUNT(*) as new_patients
-      FROM patients 
+      FROM patients p
       WHERE deleted_at IS NULL 
         AND created_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+        ${scope.clause ? `AND ${scope.clause}` : ''}
       GROUP BY DATE_FORMAT(created_at, '%Y-%m')
       ORDER BY month ASC
-    `);
+    `, scope.params);
 
     res.json({
       success: true,
@@ -1434,12 +1534,14 @@ const getAssignableStaff = async (req, res) => {
       ? rawRoles.split(',').map((r) => r.trim().toUpperCase()).filter(Boolean)
       : [];
 
-    if (req.user.role === 'ORTHODONTIST') {
-      // Orthodontists can only assign surgeons/students.
-      const allowedForOrtho = new Set(['DENTAL_SURGEON', 'STUDENT']);
+    if (req.user.role === 'ORTHODONTIST' || req.user.role === 'DENTAL_SURGEON') {
+      const isOrthodontist = req.user.role === 'ORTHODONTIST';
+      const allowedForSupervisor = isOrthodontist
+        ? new Set(['DENTAL_SURGEON', 'STUDENT'])
+        : new Set(['STUDENT']);
       const effectiveRoles = requestedRoles.length
-        ? requestedRoles.filter((r) => allowedForOrtho.has(r))
-        : Array.from(allowedForOrtho);
+        ? requestedRoles.filter((r) => allowedForSupervisor.has(r))
+        : Array.from(allowedForSupervisor);
 
       if (!effectiveRoles.length) {
         return res.json({ success: true, data: [] });
@@ -1521,8 +1623,12 @@ const assignPatientMember = async (req, res) => {
     const allowedRoles = ['ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'STUDENT'];
     let manageableRoles = new Set(['ORTHODONTIST', 'DENTAL_SURGEON']);
 
-    if (req.user.role === 'ORTHODONTIST') {
-      const canAssignRoles = new Set(['DENTAL_SURGEON', 'STUDENT']);
+    if (req.user.role === 'ORTHODONTIST' || req.user.role === 'DENTAL_SURGEON') {
+      const isOrthodontist = req.user.role === 'ORTHODONTIST';
+      const canAssignRoles = isOrthodontist
+        ? new Set(['DENTAL_SURGEON', 'STUDENT'])
+        : new Set(['STUDENT']);
+      const ownAssignmentRole = isOrthodontist ? 'ORTHODONTIST' : 'DENTAL_SURGEON';
       manageableRoles = canAssignRoles;
 
       const scopeRows = await query(
@@ -1530,10 +1636,10 @@ const assignPatientMember = async (req, res) => {
          FROM patient_assignments
          WHERE patient_id = ?
            AND user_id = ?
-           AND assignment_role = 'ORTHODONTIST'
+           AND assignment_role = ?
            AND active = TRUE
          LIMIT 1`,
-        [patientId, req.user.id]
+        [patientId, req.user.id, ownAssignmentRole]
       );
 
       if (!scopeRows.length) {
@@ -1547,7 +1653,9 @@ const assignPatientMember = async (req, res) => {
       if (hasInvalidRole) {
         return res.status(403).json({
           success: false,
-          message: 'Orthodontists can only assign DENTAL_SURGEON or STUDENT'
+          message: isOrthodontist
+            ? 'Orthodontists can only assign DENTAL_SURGEON or STUDENT'
+            : 'Dental surgeons can only assign STUDENT'
         });
       }
     }
@@ -1620,6 +1728,15 @@ const assignPatientMember = async (req, res) => {
         skipped.push({ user_id, assignment_role, reason: 'already_assigned' });
         if (!desiredByRole.has(assignment_role)) desiredByRole.set(assignment_role, new Set());
         desiredByRole.get(assignment_role).add(user_id);
+        if (assignment_role === 'STUDENT' && ['ORTHODONTIST', 'DENTAL_SURGEON'].includes(req.user.role)) {
+          await ensureStudentCaseForAssignment({
+            patientId: Number(patientId),
+            studentId: user_id,
+            supervisorId: Number(req.user.id),
+            supervisorRole: req.user.role,
+            assignedBy: Number(req.user.id)
+          });
+        }
         continue;
       }
 
@@ -1666,6 +1783,15 @@ const assignPatientMember = async (req, res) => {
         });
 
         created.push({ id: assignmentId, user_id, assignment_role });
+        if (assignment_role === 'STUDENT' && ['ORTHODONTIST', 'DENTAL_SURGEON'].includes(req.user.role)) {
+          await ensureStudentCaseForAssignment({
+            patientId: Number(patientId),
+            studentId: user_id,
+            supervisorId: Number(req.user.id),
+            supervisorRole: req.user.role,
+            assignedBy: Number(req.user.id)
+          });
+        }
         await logAuditEvent(req.user.id, 'ASSIGN', 'PATIENT_ASSIGNMENT', assignmentId, null, {
           patient_id: Number(patientId),
           user_id,
@@ -1887,6 +2013,26 @@ const respondToAssignmentRequest = async (req, res) => {
             assigned_by: Number(request.requested_by),
             active: true
           });
+          if (String(request.target_role).toUpperCase() === 'STUDENT') {
+            const supervisors = await query(
+              `SELECT user_id
+               FROM patient_assignments
+               WHERE patient_id = ?
+                 AND assignment_role = 'ORTHODONTIST'
+                 AND active = TRUE
+               ORDER BY created_at DESC`,
+              [request.patient_id]
+            );
+
+            for (const supervisor of supervisors) {
+              await ensureStudentCaseForAssignment({
+                patientId: Number(request.patient_id),
+                studentId: Number(request.target_user_id),
+                supervisorId: Number(supervisor.user_id),
+                assignedBy: Number(request.requested_by)
+              });
+            }
+          }
           await logAuditEvent(req.user.id, 'ASSIGN_APPROVED', 'PATIENT_ASSIGNMENT', assignmentId, null, {
             request_id: Number(request.id),
             patient_id: Number(request.patient_id),

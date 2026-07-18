@@ -639,7 +639,7 @@ const getStaffDirectory = async (req, res) => {
   try {
     const { role, department } = req.query;
 
-    let whereClause = 'WHERE status = "ACTIVE"';
+    let whereClause = "WHERE status = 'ACTIVE'";
     let queryParams = [];
 
     if (role) {
@@ -666,7 +666,7 @@ const getStaffDirectory = async (req, res) => {
     const staffWithStats = await Promise.all(
       staff.map(async (member) => {
         const [cases, visits, notes] = await Promise.all([
-          query('SELECT COUNT(*) as count FROM cases WHERE student_id = ? AND status IN ("ASSIGNED", "PENDING_VERIFICATION")', [member.id]),
+          query("SELECT COUNT(*) as count FROM cases WHERE student_id = ? AND status IN ('ASSIGNED', 'PENDING_VERIFICATION')", [member.id]),
           query('SELECT COUNT(*) as count FROM visits WHERE provider_id = ? AND visit_date >= DATE_SUB(NOW(), INTERVAL 30 DAY)', [member.id]),
           query('SELECT COUNT(*) as count FROM clinical_notes WHERE author_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)', [member.id])
         ]);

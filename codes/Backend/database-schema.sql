@@ -207,6 +207,9 @@ CREATE TABLE medical_documents (
     uploaded_by INT NOT NULL,
     type ENUM('RADIOGRAPH', 'NOTE', 'SCAN', 'PHOTO') NOT NULL,
     file_path VARCHAR(500) NOT NULL,
+    storage_provider ENUM('local', 's3') NOT NULL DEFAULT 'local',
+    storage_bucket VARCHAR(255) NULL,
+    storage_key VARCHAR(700) NULL,
     original_filename VARCHAR(255) NOT NULL,
     file_size BIGINT NOT NULL,
     mime_type VARCHAR(100) NOT NULL,
@@ -216,6 +219,7 @@ CREATE TABLE medical_documents (
     FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE RESTRICT,
     INDEX idx_patient_id (patient_id),
     INDEX idx_type (type),
+    INDEX idx_medical_documents_storage_key (storage_key(191)),
     INDEX idx_created_at (created_at)
 );
 
@@ -283,7 +287,7 @@ CREATE TABLE queue (
     patient_id INT NOT NULL,
     provider_id INT NULL,
     student_id INT NULL,
-    status ENUM('WAITING', 'IN_TREATMENT', 'PREPARATION', 'COMPLETED') DEFAULT 'WAITING',
+    status ENUM('IN_WAITING_ROOM', 'UNDER_CONSULTATION', 'UNDER_TREATMENT', 'COMPLETED') DEFAULT 'IN_WAITING_ROOM',
     priority ENUM('LOW', 'NORMAL', 'HIGH', 'URGENT') DEFAULT 'NORMAL',
     procedure_type VARCHAR(255),
     arrival_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -307,19 +311,81 @@ CREATE TABLE cases (
     patient_id INT NOT NULL,
     student_id INT NOT NULL,
     supervisor_id INT NOT NULL,
+    assigned_by INT NULL,
     status ENUM('ASSIGNED', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED') DEFAULT 'ASSIGNED',
     progress_notes TEXT,
+    progress_percentage INT NOT NULL DEFAULT 0,
     requirements_met JSON,
     supervisor_feedback TEXT,
+    latest_evaluation TEXT NULL,
+    latest_recommendation TEXT NULL,
+    submitted_for_verification_at TIMESTAMP NULL DEFAULT NULL,
+    verified_by INT NULL DEFAULT NULL,
+    verified_at TIMESTAMP NULL DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
     FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE RESTRICT,
     FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (verified_by) REFERENCES users(id) ON DELETE SET NULL,
     INDEX idx_student_id (student_id),
     INDEX idx_supervisor_id (supervisor_id),
     INDEX idx_status (status),
     INDEX idx_patient_id (patient_id)
+);
+
+CREATE TABLE case_progress_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    case_id INT NOT NULL,
+    patient_id INT NOT NULL,
+    actor_id INT NOT NULL,
+    actor_role ENUM('ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'STUDENT', 'RECEPTION') NOT NULL,
+    log_type ENUM('ASSIGNED', 'STUDENT_PROGRESS', 'SUPERVISOR_REVIEW', 'STATUS_CHANGE', 'SYSTEM_NOTE') NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    entry_text TEXT NULL,
+    progress_percentage INT NULL,
+    evaluation TEXT NULL,
+    recommendations TEXT NULL,
+    status_from ENUM('ASSIGNED', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED') NULL,
+    status_to ENUM('ASSIGNED', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED') NULL,
+    metadata JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE,
+    FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+    FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE RESTRICT,
+    INDEX idx_case_progress_logs_case (case_id, created_at),
+    INDEX idx_case_progress_logs_patient (patient_id, created_at),
+    INDEX idx_case_progress_logs_type (log_type)
+);
+
+CREATE TABLE case_tasks (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    case_id INT NOT NULL,
+    patient_id INT NOT NULL,
+    student_id INT NOT NULL,
+    supervisor_id INT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NULL,
+    deadline_at DATETIME NULL,
+    status ENUM('ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'REVIEWED') NOT NULL DEFAULT 'ASSIGNED',
+    completion_notes TEXT NULL,
+    completed_at DATETIME NULL,
+    reviewed_by INT NULL DEFAULT NULL,
+    reviewed_at DATETIME NULL,
+    review_notes TEXT NULL,
+    created_by INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE,
+    FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+    FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+    INDEX idx_case_tasks_case (case_id, status, deadline_at),
+    INDEX idx_case_tasks_student (student_id, status),
+    INDEX idx_case_tasks_supervisor (supervisor_id, status)
 );
 
 -- Inventory Items Table - Materials Management
@@ -482,7 +548,7 @@ FROM queue q
 JOIN patients p ON q.patient_id = p.id
 LEFT JOIN users u ON q.provider_id = u.id
 LEFT JOIN users s ON q.student_id = s.id
-WHERE q.status != 'COMPLETED'
+WHERE q.arrival_time >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
 ORDER BY q.priority DESC, q.arrival_time ASC;
 
 -- Student Progress View

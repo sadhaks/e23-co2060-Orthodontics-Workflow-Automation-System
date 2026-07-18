@@ -24,4 +24,18 @@ export default defineConfig({
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('/@mui') || id.includes('/@emotion')) return 'mui-vendor';
+          if (id.includes('/@radix-ui')) return 'radix-vendor';
+          if (id.includes('/recharts') || id.includes('/d3-')) return 'charts-vendor';
+          if (id.includes('/lucide-react')) return 'icons-vendor';
+          return 'vendor';
+        },
+      },
+    },
+  },
 })

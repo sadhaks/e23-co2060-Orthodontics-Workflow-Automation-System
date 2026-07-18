@@ -21,6 +21,7 @@ type AuditLog = {
 
 const ROLE_OPTIONS = ['', 'ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'RECEPTION', 'STUDENT'];
 const PAGE_SIZE = 25;
+const AUDIT_LOG_TIME_ZONE = 'Asia/Colombo';
 
 const parsePayload = (value: any): Record<string, any> | null => {
   if (!value) return null;
@@ -68,6 +69,42 @@ const formatDateTimeDisplay = (value: string) => {
   return value.replace('T', ' ');
 };
 
+const parseAuditTimestamp = (value: string) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(normalized)) {
+    return new Date(normalized);
+  }
+  return new Date(`${normalized.replace(' ', 'T')}Z`);
+};
+
+const formatAuditTimestamp = (value: string) => {
+  const date = parseAuditTimestamp(value);
+  if (!date || Number.isNaN(date.getTime())) {
+    return String(value || '-').replace('T', ' ').slice(0, 19);
+  }
+
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: AUDIT_LOG_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+  const getPart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || '';
+  return `${getPart('year')}-${getPart('month')}-${getPart('day')} ${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
+};
+
+const toUtcQueryDateTime = (value: string) => {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+};
+
 export function AuditLogsPage() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,8 +136,8 @@ export function AuditLogsPage() {
         limit: PAGE_SIZE,
         search: search || undefined,
         role: role || undefined,
-        start_date: startDateTime ? startDateTime.replace('T', ' ') : undefined,
-        end_date: endDateTime ? endDateTime.replace('T', ' ') : undefined
+        start_date: toUtcQueryDateTime(startDateTime),
+        end_date: toUtcQueryDateTime(endDateTime)
       });
       const payload = response.data || {};
       setLogs(payload.logs || []);
@@ -181,7 +218,6 @@ export function AuditLogsPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Audit Log</h2>
-          <p className="text-gray-500">Read-only system activity across all users and roles.</p>
         </div>
         <RefreshButton onClick={loadLogs} loading={loading} />
       </div>
@@ -286,7 +322,7 @@ export function AuditLogsPage() {
           <tbody>
             {logs.map((row) => (
               <tr key={row.id} className="border-b border-gray-50">
-                <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{String(row.timestamp).replace('T', ' ').slice(0, 19)}</td>
+                <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{formatAuditTimestamp(row.timestamp)}</td>
                 <td className="px-4 py-3">
                   <div className="text-sm font-medium text-gray-900">{row.user_name}</div>
                   <div className="text-xs text-gray-500">{row.user_email}</div>

@@ -1,179 +1,189 @@
-# OrthoFlow Quick Deployment
+# OrthoFlow Quick Deployment Guide
 
-This is the shortest accurate setup path for the current repository version.
+This is a short operational checklist for deploying the current system. For full handover instructions, use `../docs/cloud-deployment.md`.
 
-Replace `/path/to/Orthodontics Workflow Automation System` below with the local path where you cloned or extracted this repository.
+## 1. Required Services
 
-## 1. What This Guide Covers
+Use stakeholder-owned accounts where possible.
 
-This guide is for bringing up the current system on a local or single-machine environment.
+- GitHub fork of the parent repository
+- Render for frontend and backend hosting
+- Aiven MySQL for the production database
+- Cloudflare R2 for uploaded patient documents and images
+- SMTP2GO or Brevo for email
+- Google Cloud OAuth for Google Sign-In
 
-It assumes:
+## 2. Backend Service on Render
 
-- Node.js 18+ is installed
-- npm is installed
-- MySQL 8+ is installed and running
+Create a Render **Web Service**.
 
-## 2. Backend Boot
+Recommended backend settings:
 
-```bash
-cd "/path/to/Orthodontics Workflow Automation System/Backend"
-npm install
-```
+- Runtime: Docker
+- Root directory: `codes/Backend`
+- Dockerfile path: `./Dockerfile`
+- Instance: Starter or higher for production
+- Region: preferably close to the Aiven database region
 
-Edit `Backend/.env` at minimum:
-
-```env
-PORT=3000
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=your_user
-DB_PASSWORD=your_password
-DB_NAME=orthoflow
-
-JWT_SECRET=change_this
-JWT_REFRESH_SECRET=change_this
-SESSION_TIMEOUT_SECONDS=3600
-
-CORS_ORIGIN=http://localhost:5173
-
-GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
-
-EMAIL_SIMULATION=true
-
-SEED_ADMIN_NAME=System Administrator
-SEED_ADMIN_EMAIL=admin@orthoflow.edu
-SEED_ADMIN_DEPARTMENT=Orthodontics
-SEED_ADMIN_PASSWORD=
-```
-
-Initialize and start:
-
-```bash
-npm run migrate
-npm run seed
-npm run dev
-```
-
-Important:
-
-- `npm run seed` clears and reloads core application data
-- `npm run seed` reads the initial admin identity from `SEED_ADMIN_*` values in `Backend/.env`
-- if `SEED_ADMIN_PASSWORD` is blank, the seed prints a generated temporary password and the admin must change it on first login
-- the backend should be reachable at `http://localhost:3000`
-- health check should return JSON at `http://localhost:3000/health`
-
-## 3. Frontend Boot
-
-```bash
-cd "/path/to/Orthodontics Workflow Automation System/Frontend"
-npm install
-```
-
-Set in `Frontend/.env`:
+Important backend environment variables:
 
 ```env
-VITE_GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
-```
+NODE_ENV=production
+PORT=10000
+CORS_ORIGIN=https://<frontend-service>.onrender.com
 
-Start:
+DB_HOST=<aiven-host>
+DB_PORT=<aiven-port>
+DB_USER=avnadmin
+DB_PASSWORD=<aiven-password>
+DB_NAME=defaultdb
+DB_SSL=true
+DB_SSL_REJECT_UNAUTHORIZED=true
+DB_SSL_CA=<aiven-ca-certificate>
 
-```bash
-npm run dev
-```
+JWT_SECRET=<long-random-secret>
+JWT_REFRESH_SECRET=<different-long-random-secret>
 
-Frontend URL:
+GOOGLE_CLIENT_ID=<google-client-id>
 
-- `http://localhost:5173`
+FILE_STORAGE_PROVIDER=r2
+R2_BUCKET=<bucket-name>
+R2_ENDPOINT=https://<cloudflare-account-id>.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=<r2-access-key-id>
+R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
+R2_REGION=auto
+R2_FORCE_PATH_STYLE=true
+UPLOAD_DIR=/tmp/uploads
 
-## 4. Important Current Constraint
-
-The frontend API base is currently hardcoded in `Frontend/src/app/config/api.ts` to:
-
-```ts
-BASE_URL: 'http://localhost:3000'
-```
-
-So if you deploy the backend anywhere else, you must update that file or place the app behind infrastructure that still exposes the API at that origin.
-
-## 5. Fast Local Start
-
-From repo root:
-
-```bash
-./start-orthoflow.sh
-```
-
-Current helper behavior:
-
-- reuses ports `3000` and `5173` if already running
-- waits for backend health and frontend readiness
-- opens the frontend in a browser
-- stops managed child processes on `Ctrl+C`
-
-## 6. Login After Seeding
-
-Seeded admin account:
-
-- email comes from `SEED_ADMIN_EMAIL` or defaults to `admin@orthoflow.edu`
-- name comes from `SEED_ADMIN_NAME` or defaults to `System Administrator`
-- department comes from `SEED_ADMIN_DEPARTMENT` or defaults to `Orthodontics`
-- password comes from `SEED_ADMIN_PASSWORD`, or is generated temporarily during `npm run seed`
-
-If the password is generated, use the value printed by the seed command and change it immediately after sign-in.
-
-## 7. Google Sign-In
-
-Google Sign-In is optional for local boot, but if you want it working:
-
-1. Create a Google OAuth web client.
-2. Add `http://localhost:5173` as an authorized JavaScript origin.
-3. Use the same client ID in:
-   - `Backend/.env` as `GOOGLE_CLIENT_ID`
-   - `Frontend/.env` as `VITE_GOOGLE_CLIENT_ID`
-
-If `VITE_GOOGLE_CLIENT_ID` is missing, the Google button will not initialize.
-
-## 8. Real Email Sending
-
-For local-safe runs, keep:
-
-```env
-EMAIL_SIMULATION=true
-```
-
-For real SMTP sending, change to:
-
-```env
 EMAIL_SIMULATION=false
-SMTP_HOST=smtp.gmail.com
+SMTP_HOST=<smtp-host>
+SMTP_PORT=<smtp-port>
+SMTP_SECURE=false
+SMTP_USER=<smtp-username>
+SMTP_PASS=<smtp-password-or-key>
+SMTP_FROM=<verified-sender-address>
+```
+
+After deployment, check:
+
+```text
+https://<backend-service>.onrender.com/health
+```
+
+## 3. Frontend Static Site on Render
+
+Create a Render **Static Site**.
+
+Recommended frontend settings:
+
+- Root directory: `codes/Frontend`
+- Build command: `npm install && npm run build`
+- Publish directory: `dist`
+
+Frontend environment variables:
+
+```env
+VITE_API_BASE_URL=https://<backend-service>.onrender.com
+VITE_GOOGLE_CLIENT_ID=<google-client-id>
+```
+
+After deployment, open the frontend URL and test login.
+
+## 4. Aiven MySQL
+
+Create an Aiven MySQL service and copy:
+
+- host
+- port
+- database name
+- username
+- password
+- CA certificate
+
+The backend startup guards update selected parts of an existing OrthoFlow schema, but they do not create the core schema in a fresh database.
+
+Before the first backend deployment, configure the Aiven database variables and intended `SEED_ADMIN_*` values on a trusted administrative machine, then initialize the new/empty database once from the repository root:
+
+```bash
+cd codes/Backend
+npm ci
+npm run bootstrap-db
+npm run ensure-admin
+```
+
+Confirm that `DB_NAME` identifies the intended new/empty OrthoFlow database before running `bootstrap-db`. Back up an existing database before any schema operation. Normal later deployments use the startup guards for supported incremental changes.
+
+## 5. Cloudflare R2
+
+Create one private bucket for OrthoFlow files.
+
+Recommended bucket contents:
+
+- patient documents
+- uploaded images
+- uploaded PDFs
+
+The database stores the object key and metadata. R2 stores the actual file bytes.
+Dental-chart version PDFs and complete patient-record PDFs are generated on demand and streamed to the requester; the backend does not store those generated PDFs in R2.
+
+## 6. Email Provider
+
+Either SMTP2GO or Brevo can be used.
+
+SMTP2GO:
+
+```env
+SMTP_HOST=mail.smtp2go.com
+SMTP_PORT=2525
+SMTP_SECURE=false
+SMTP_USER=<smtp2go-smtp-user>
+SMTP_PASS=<smtp2go-smtp-password>
+SMTP_FROM=<verified-sender>
+```
+
+Brevo:
+
+```env
+SMTP_HOST=smtp-relay.brevo.com
 SMTP_PORT=587
 SMTP_SECURE=false
-SMTP_USER=your_email
-SMTP_PASS=your_app_password
-SMTP_FROM=your_email
+SMTP_USER=<brevo-login>
+SMTP_PASS=<brevo-smtp-key>
+SMTP_FROM=<verified-sender>
 ```
 
-This affects reminder emails and admin password email flows.
+For final production, prefer a faculty-owned sender such as:
 
-## 9. Optional Visual PDF Support
-
-For dental-chart visual PDF rendering:
-
-```bash
-cd "/path/to/Orthodontics Workflow Automation System/Backend"
-npm i playwright
-npx playwright install chromium
+```text
+no-reply@dental.pdn.ac.lk
 ```
 
-Without Chromium, the system falls back automatically.
+## 7. Google OAuth
 
-## 10. Quick Verification
+In Google Cloud Console, configure the OAuth web client.
 
-Check these after startup:
+Authorized JavaScript origins:
 
-1. `http://localhost:3000/health`
-2. `http://localhost:5173`
-3. sign in with a seeded account
-4. open patients, queue, or materials depending on role
-5. for admin, verify reports and audit log pages load
+```text
+https://<frontend-service>.onrender.com
+```
+
+No redirect URI is normally needed for the Google Identity Services button used by the frontend.
+
+## 8. Final Smoke Test
+
+After backend and frontend are deployed:
+
+1. Open backend `/health`.
+2. Open frontend.
+3. Sign in using email/password.
+4. Sign in using Google.
+5. Create or open a patient.
+6. Upload a document and download it.
+7. Save and download a dental chart PDF.
+8. On a phone-sized viewport, open the dental chart annotation popup and focus the Pathology/Treatment fields.
+9. Confirm student case assignment/supervision works for orthodontists and dental surgeons.
+10. Confirm admin can delete a removed student case.
+11. As an admin, generate a temporary-password reset email for a test user.
+12. Check audit logs as admin.
+13. Confirm Render logs show no repeated errors.

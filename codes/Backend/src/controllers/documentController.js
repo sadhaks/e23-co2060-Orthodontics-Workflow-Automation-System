@@ -8,8 +8,14 @@ const {
 } = require('../config/database');
 const { logAuditEvent } = require('../middleware/errorHandler');
 const { getFileInfo } = require('../middleware/upload');
-const path = require('path');
-const fs = require('fs').promises;
+const {
+  isObjectStorageEnabled,
+  buildObjectKey,
+  uploadLocalFileToObjectStorage,
+  getStoredObjectStream,
+  deleteStoredObject,
+  cleanupLocalFile
+} = require('../services/fileStorageService');
 
 // Get documents for a patient
 const getPatientDocuments = async (req, res) => {
@@ -101,6 +107,7 @@ const getPatientDocuments = async (req, res) => {
 
 // Upload document for patient
 const uploadDocument = async (req, res) => {
+  let uploadedStorageObject = null;
   try {
     const { patientId } = req.params;
     const { type, description } = req.body;
@@ -125,7 +132,7 @@ const uploadDocument = async (req, res) => {
     const validTypes = ['RADIOGRAPH', 'NOTE', 'SCAN', 'PHOTO'];
     if (!validTypes.includes(type)) {
       // Clean up uploaded file
-      await fs.unlink(req.file.path).catch(() => {});
+      await cleanupLocalFile(req.file.path);
       return res.status(400).json({
         success: false,
         message: 'Invalid document type'
@@ -134,11 +141,27 @@ const uploadDocument = async (req, res) => {
 
     // Prepare document data
     const fileInfo = getFileInfo(req.file);
+    if (isObjectStorageEnabled()) {
+      const storageKey = buildObjectKey({
+        patientId,
+        filename: fileInfo.filename
+      });
+      uploadedStorageObject = await uploadLocalFileToObjectStorage({
+        localPath: fileInfo.path,
+        key: storageKey,
+        contentType: fileInfo.mimetype
+      });
+      await cleanupLocalFile(fileInfo.path);
+    }
+
     const documentData = {
       patient_id: patientId,
       uploaded_by: req.user.id,
       type,
-      file_path: fileInfo.path,
+      file_path: uploadedStorageObject?.storage_key || fileInfo.path,
+      storage_provider: uploadedStorageObject?.storage_provider || 'local',
+      storage_bucket: uploadedStorageObject?.storage_bucket || null,
+      storage_key: uploadedStorageObject?.storage_key || null,
       original_filename: fileInfo.originalname,
       file_size: fileInfo.size,
       mime_type: fileInfo.mimetype,
@@ -178,7 +201,10 @@ const uploadDocument = async (req, res) => {
     
     // Clean up uploaded file on error
     if (req.file) {
-      await fs.unlink(req.file.path).catch(() => {});
+      await cleanupLocalFile(req.file.path);
+    }
+    if (uploadedStorageObject) {
+      await deleteStoredObject(uploadedStorageObject).catch(() => {});
     }
 
     res.status(500).json({
@@ -244,13 +270,14 @@ const downloadDocument = async (req, res) => {
       });
     }
 
-    // Check if file exists
+    let fileStream;
     try {
-      await fs.access(document.file_path);
-    } catch {
+      fileStream = await getStoredObjectStream(document);
+    } catch (error) {
+      console.error('Document file missing:', error);
       return res.status(404).json({
         success: false,
-        message: 'File not found on server'
+        message: 'File not found in storage'
       });
     }
 
@@ -259,8 +286,17 @@ const downloadDocument = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${document.original_filename}"`);
     res.setHeader('Content-Length', document.file_size);
 
-    // Send file
-    const fileStream = require('fs').createReadStream(document.file_path);
+    fileStream.on('error', (error) => {
+      console.error('Document download stream error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          message: 'Failed to read document'
+        });
+      } else {
+        res.destroy(error);
+      }
+    });
     fileStream.pipe(res);
 
     // Log download
@@ -362,7 +398,7 @@ const deleteDocument = async (req, res) => {
       }
 
       try {
-        await fs.unlink(existingDocument.file_path);
+        await deleteStoredObject(existingDocument);
       } catch (error) {
         console.error('Failed to delete file:', error);
       }

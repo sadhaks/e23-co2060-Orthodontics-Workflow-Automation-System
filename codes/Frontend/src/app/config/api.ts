@@ -1,7 +1,7 @@
 // API Configuration for OrthoFlow Frontend
 export const API_CONFIG = {
-  BASE_URL: 'http://localhost:3000', // Update this for production
-  TIMEOUT: 10000, // 10 seconds
+  BASE_URL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000',
+  TIMEOUT: 120000, // 120 seconds, enough for free-tier Render cold starts
   RETRY_ATTEMPTS: 3,
 };
 
@@ -63,6 +63,7 @@ export const API_ENDPOINTS = {
   // Visits
   VISITS: {
     TODAY: '/api/visits/today',
+    UPCOMING: '/api/visits/upcoming',
     LIST: '/api/visits',
     DETAIL: (id: string) => `/api/visits/${id}`,
     UPDATE: (id: string) => `/api/visits/${id}`,
@@ -131,6 +132,12 @@ export const API_ENDPOINTS = {
     CREATE: '/api/cases',
     UPDATE: (id: string) => `/api/cases/${id}`,
     DELETE: (id: string) => `/api/cases/${id}`,
+    PROGRESS: (id: string) => `/api/cases/${id}/progress`,
+    REVIEWS: (id: string) => `/api/cases/${id}/reviews`,
+    TASKS: (id: string) => `/api/cases/${id}/tasks`,
+    TASK_DETAIL: (id: string, taskId: string) => `/api/cases/${id}/tasks/${taskId}`,
+    TASK_REVIEW: (id: string, taskId: string) => `/api/cases/${id}/tasks/${taskId}/review`,
+    TASK_DELETE: (id: string, taskId: string) => `/api/cases/${id}/tasks/${taskId}`,
     STATS: '/api/cases/stats',
     STUDENT_CASES: (studentId: string) => `/api/cases/students/${studentId}`,
   },
@@ -164,6 +171,7 @@ export const API_ENDPOINTS = {
     VISIT_SUMMARY: '/api/reports/visit-summary',
     INVENTORY_ALERTS: '/api/reports/inventory-alerts',
     DASHBOARD: '/api/reports/dashboard',
+    SUMMARY_PATIENTS: '/api/reports/summary-patients',
     AUDIT_LOGS: '/api/reports/audit-logs',
   },
 } as const;

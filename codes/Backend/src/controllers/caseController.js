@@ -1,93 +1,269 @@
-const { 
-  findOne, 
-  findMany, 
-  insert, 
-  update, 
-  remove,
-  query
-} = require('../config/database');
+const { findOne, insert, query, update, remove } = require('../config/database');
 const { logAuditEvent } = require('../middleware/errorHandler');
+const {
+  CASE_STATUSES,
+  TASK_STATUSES,
+  normalizeTaskStatus,
+  logCaseEvent,
+  ensureStudentCaseForAssignment,
+  getCaseByIdWithRelations,
+  hasActiveAssignmentForCaseUser,
+  getTaskSummarySelect,
+  getTaskSummaryJoin,
+  getCaseTasks
+} = require('../services/studentCaseService');
 
-// Get all cases (with filtering)
+const parseRequirements = (value) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const hydrateCaseRow = (row) => {
+  if (!row) return row;
+  return {
+    ...row,
+    requirements_met: parseRequirements(row.requirements_met),
+    progress_percentage: Number(row.progress_percentage || 0),
+    total_tasks: Number(row.total_tasks || 0),
+    completed_tasks: Number(row.completed_tasks || 0),
+    reviewed_tasks: Number(row.reviewed_tasks || 0),
+    pending_tasks: Number(row.pending_tasks || 0),
+    overdue_tasks: Number(row.overdue_tasks || 0),
+    student_assignment_active: row.student_assignment_active === undefined ? true : Boolean(Number(row.student_assignment_active)),
+    patient_age: row.patient_dob
+      ? Math.floor((new Date() - new Date(row.patient_dob)) / (365.25 * 24 * 60 * 60 * 1000))
+      : row.patient_age
+  };
+};
+
+const buildScopedCaseFilter = (user) => {
+  const activeStudentAssignmentClause = `
+    EXISTS (
+      SELECT 1
+      FROM patient_assignments pa_student
+      WHERE pa_student.patient_id = c.patient_id
+        AND pa_student.user_id = c.student_id
+        AND pa_student.assignment_role = 'STUDENT'
+        AND pa_student.active = TRUE
+    )
+  `;
+
+  if (user.role === 'ADMIN') {
+    return { clause: '1=1', params: [] };
+  }
+
+  if (['ORTHODONTIST', 'DENTAL_SURGEON'].includes(user.role)) {
+    return {
+      clause: `
+        c.supervisor_id = ?
+        AND EXISTS (
+          SELECT 1
+          FROM patient_assignments pa
+          WHERE pa.patient_id = c.patient_id
+            AND pa.user_id = ?
+            AND pa.assignment_role = ?
+            AND pa.active = TRUE
+        )
+      `,
+      params: [user.id, user.id, user.role]
+    };
+  }
+
+  if (user.role === 'STUDENT') {
+    return {
+      clause: `
+        ${activeStudentAssignmentClause}
+        AND
+        c.student_id = ?
+        AND EXISTS (
+          SELECT 1
+          FROM patient_assignments pa
+          WHERE pa.patient_id = c.patient_id
+            AND pa.user_id = ?
+            AND pa.assignment_role = 'STUDENT'
+            AND pa.active = TRUE
+        )
+      `,
+      params: [user.id, user.id]
+    };
+  }
+
+  return { clause: '1=0', params: [] };
+};
+
+const loadCaseOrThrow = async (req, res) => {
+  const rows = await query(
+    `SELECT
+       c.*,
+       EXISTS (
+         SELECT 1
+         FROM patient_assignments pa_student
+         WHERE pa_student.patient_id = c.patient_id
+           AND pa_student.user_id = c.student_id
+           AND pa_student.assignment_role = 'STUDENT'
+           AND pa_student.active = TRUE
+       ) AS student_assignment_active,
+       ${getTaskSummarySelect()}
+     FROM cases c
+     ${getTaskSummaryJoin()}
+     WHERE c.id = ?
+     LIMIT 1`,
+    [Number(req.params.id)]
+  );
+  const rawCase = rows[0];
+
+  if (!rawCase) {
+    res.status(404).json({
+      success: false,
+      message: 'Case not found'
+    });
+    return null;
+  }
+
+  const fullCase = await getCaseByIdWithRelations(Number(rawCase.id));
+  const allowed = await hasActiveAssignmentForCaseUser(fullCase, req.user);
+  if (!allowed) {
+    res.status(403).json({
+      success: false,
+      message: 'You do not have access to this student case'
+    });
+    return null;
+  }
+
+  return hydrateCaseRow({ ...fullCase, ...rawCase });
+};
+
+const requireSupervisorRole = (req, res, caseRow) => {
+  if (!['ORTHODONTIST', 'DENTAL_SURGEON'].includes(req.user.role)) {
+    res.status(403).json({
+      success: false,
+      message: 'Only the assigned supervisor can perform this action'
+    });
+    return false;
+  }
+
+  if (Number(caseRow.supervisor_id) !== Number(req.user.id)) {
+    res.status(403).json({
+      success: false,
+      message: 'Only the assigned supervisor can perform this action'
+    });
+    return false;
+  }
+
+  return true;
+};
+
+const requireSupervisorOrAdminRole = (req, res, caseRow) => {
+  if (req.user.role === 'ADMIN') {
+    return true;
+  }
+
+  return requireSupervisorRole(req, res, caseRow);
+};
+
+const requireStudentRole = (req, res, caseRow) => {
+  if (req.user.role !== 'STUDENT') {
+    res.status(403).json({
+      success: false,
+      message: 'Only the assigned student can update task progress'
+    });
+    return false;
+  }
+
+  if (Number(caseRow.student_id) !== Number(req.user.id)) {
+    res.status(403).json({
+      success: false,
+      message: 'Only the assigned student can update task progress'
+    });
+    return false;
+  }
+
+  return true;
+};
+
 const getCases = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      status, 
-      student_id,
-      supervisor_id,
-      search
-    } = req.query;
-    const offset = (page - 1) * limit;
+    const { page = 1, limit = 10, status, student_id, supervisor_id, search } = req.query;
+    const offset = (Number(page) - 1) * Number(limit);
+    const scope = buildScopedCaseFilter(req.user);
 
-    let whereClause = 'WHERE 1=1';
-    let queryParams = [];
+    const whereParts = [scope.clause];
+    const params = [...scope.params];
 
-    if (status) {
-      whereClause += ' AND c.status = ?';
-      queryParams.push(status);
+    if (status && CASE_STATUSES.includes(String(status).toUpperCase())) {
+      whereParts.push('c.status = ?');
+      params.push(String(status).toUpperCase());
     }
 
     if (student_id) {
-      whereClause += ' AND c.student_id = ?';
-      queryParams.push(student_id);
+      whereParts.push('c.student_id = ?');
+      params.push(Number(student_id));
     }
 
     if (supervisor_id) {
-      whereClause += ' AND c.supervisor_id = ?';
-      queryParams.push(supervisor_id);
+      whereParts.push('c.supervisor_id = ?');
+      params.push(Number(supervisor_id));
     }
 
     if (search) {
-      whereClause += ' AND (p.first_name LIKE ? OR p.last_name LIKE ? OR p.patient_code LIKE ?)';
       const searchTerm = `%${search}%`;
-      queryParams.push(searchTerm, searchTerm, searchTerm);
+      whereParts.push('(p.first_name LIKE ? OR p.last_name LIKE ? OR p.patient_code LIKE ? OR student.name LIKE ?)');
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
-    // Get total count
-    const countQuery = `
-      SELECT COUNT(*) as total 
-      FROM cases c
-      LEFT JOIN patients p ON c.patient_id = p.id
-      ${whereClause}
-    `;
-    const totalResult = await query(countQuery, queryParams);
-    const total = totalResult[0].total;
+    const whereClause = `WHERE ${whereParts.join(' AND ')}`;
 
-    // Get cases with details
-    const casesQuery = `
-      SELECT 
-        c.*,
-        p.patient_code,
-        CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-        TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) as patient_age,
-        p.gender as patient_gender,
-        student.name as student_name,
-        student.email as student_email,
-        supervisor.name as supervisor_name,
-        supervisor.email as supervisor_email
-      FROM cases c
-      LEFT JOIN patients p ON c.patient_id = p.id
-      LEFT JOIN users student ON c.student_id = student.id
-      LEFT JOIN users supervisor ON c.supervisor_id = supervisor.id
-      ${whereClause}
-      ORDER BY c.created_at DESC
-      LIMIT ? OFFSET ?
-    `;
-    queryParams.push(parseInt(limit), offset);
+    const countRows = await query(
+      `SELECT COUNT(*) AS total
+       FROM cases c
+       INNER JOIN patients p ON p.id = c.patient_id
+       ${whereClause}`,
+      params
+    );
 
-    const cases = await query(casesQuery, queryParams);
+    const rows = await query(
+      `SELECT
+         c.*,
+         EXISTS (
+           SELECT 1
+           FROM patient_assignments pa_student
+           WHERE pa_student.patient_id = c.patient_id
+             AND pa_student.user_id = c.student_id
+             AND pa_student.assignment_role = 'STUDENT'
+             AND pa_student.active = TRUE
+         ) AS student_assignment_active,
+         ${getTaskSummarySelect()},
+         p.patient_code,
+         CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+         TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) AS patient_age,
+         p.gender AS patient_gender,
+         student.name AS student_name,
+         supervisor.name AS supervisor_name
+       FROM cases c
+       INNER JOIN patients p ON p.id = c.patient_id
+       INNER JOIN users student ON student.id = c.student_id
+       INNER JOIN users supervisor ON supervisor.id = c.supervisor_id
+       ${getTaskSummaryJoin()}
+       ${whereClause}
+       ORDER BY COALESCE(task_summary.last_task_update_at, c.updated_at) DESC, c.id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, Number(limit), offset]
+    );
 
     res.json({
       success: true,
       data: {
-        cases,
+        cases: rows.map(hydrateCaseRow),
         pagination: {
-          current_page: parseInt(page),
-          total_pages: Math.ceil(total / limit),
-          total_records: total,
-          limit: parseInt(limit)
+          current_page: Number(page),
+          total_pages: Math.ceil(Number(countRows[0]?.total || 0) / Number(limit || 1)),
+          total_records: Number(countRows[0]?.total || 0),
+          limit: Number(limit)
         }
       }
     });
@@ -100,15 +276,10 @@ const getCases = async (req, res) => {
   }
 };
 
-// Get cases for a specific student
 const getStudentCases = async (req, res) => {
   try {
     const { studentId } = req.params;
-    const { page = 1, limit = 10, status } = req.query;
-    const offset = (page - 1) * limit;
-
-    // Check if student exists
-    const student = await findOne('users', { id: studentId, role: 'STUDENT' });
+    const student = await findOne('users', { id: Number(studentId), role: 'STUDENT', status: 'ACTIVE' });
     if (!student) {
       return res.status(404).json({
         success: false,
@@ -116,67 +287,63 @@ const getStudentCases = async (req, res) => {
       });
     }
 
-    let whereClause = 'WHERE c.student_id = ?';
-    let queryParams = [studentId];
-
-    if (status) {
-      whereClause += ' AND c.status = ?';
-      queryParams.push(status);
+    if (req.user.role === 'STUDENT' && Number(req.user.id) !== Number(studentId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only view your own student cases'
+      });
     }
 
-    // Get total count
-    const countQuery = `
-      SELECT COUNT(*) as total 
-      FROM cases c
-      ${whereClause}
-    `;
-    const totalResult = await query(countQuery, queryParams);
-    const total = totalResult[0].total;
+    const scope = buildScopedCaseFilter(req.user);
+    const params = [...scope.params, Number(studentId)];
+    const whereClause = `WHERE ${scope.clause} AND c.student_id = ?`;
 
-    // Get cases with details
-    const casesQuery = `
-      SELECT 
-        c.*,
-        p.patient_code,
-        CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-        TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) as patient_age,
-        p.gender as patient_gender,
-        supervisor.name as supervisor_name,
-        supervisor.email as supervisor_email
-      FROM cases c
-      LEFT JOIN patients p ON c.patient_id = p.id
-      LEFT JOIN users supervisor ON c.supervisor_id = supervisor.id
-      ${whereClause}
-      ORDER BY c.created_at DESC
-      LIMIT ? OFFSET ?
-    `;
-    queryParams.push(parseInt(limit), offset);
+    const rows = await query(
+      `SELECT
+         c.*,
+         ${getTaskSummarySelect()},
+         p.patient_code,
+         CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+         TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) AS patient_age,
+         p.gender AS patient_gender,
+         supervisor.name AS supervisor_name
+       FROM cases c
+       INNER JOIN patients p ON p.id = c.patient_id
+       INNER JOIN users supervisor ON supervisor.id = c.supervisor_id
+       ${getTaskSummaryJoin()}
+       ${whereClause}
+       ORDER BY COALESCE(task_summary.last_task_update_at, c.updated_at) DESC, c.id DESC`,
+      params
+    );
 
-    const cases = await query(casesQuery, queryParams);
-
-    // Get student progress summary
-    const progressQuery = `
-      SELECT 
-        COUNT(*) as total_cases,
-        COUNT(CASE WHEN status = 'VERIFIED' THEN 1 END) as verified_cases,
-        COUNT(CASE WHEN status = 'PENDING_VERIFICATION' THEN 1 END) as pending_cases,
-        COUNT(CASE WHEN status = 'ASSIGNED' THEN 1 END) as assigned_cases,
-        COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) as rejected_cases
-      FROM cases 
-      WHERE student_id = ?
-    `;
-    const progress = await query(progressQuery, [studentId]);
+    const progressRows = await query(
+      `SELECT
+         COUNT(*) AS total_cases,
+         SUM(COALESCE(task_summary.total_tasks, 0)) AS total_tasks,
+         SUM(COALESCE(task_summary.completed_tasks, 0)) AS completed_tasks,
+         SUM(COALESCE(task_summary.reviewed_tasks, 0)) AS reviewed_tasks,
+         SUM(COALESCE(task_summary.pending_tasks, 0)) AS pending_tasks,
+         SUM(COALESCE(task_summary.overdue_tasks, 0)) AS overdue_tasks,
+         ROUND(AVG(COALESCE(task_summary.progress_percentage, 0)), 0) AS avg_progress
+       FROM cases c
+       ${getTaskSummaryJoin()}
+       ${whereClause}`,
+      params
+    );
 
     res.json({
       success: true,
       data: {
-        cases,
-        progress: progress[0],
-        pagination: {
-          current_page: parseInt(page),
-          total_pages: Math.ceil(total / limit),
-          total_records: total,
-          limit: parseInt(limit)
+        cases: rows.map(hydrateCaseRow),
+        progress: {
+          ...progressRows[0],
+          total_cases: Number(progressRows[0]?.total_cases || 0),
+          total_tasks: Number(progressRows[0]?.total_tasks || 0),
+          completed_tasks: Number(progressRows[0]?.completed_tasks || 0),
+          reviewed_tasks: Number(progressRows[0]?.reviewed_tasks || 0),
+          pending_tasks: Number(progressRows[0]?.pending_tasks || 0),
+          overdue_tasks: Number(progressRows[0]?.overdue_tasks || 0),
+          avg_progress: Number(progressRows[0]?.avg_progress || 0)
         }
       }
     });
@@ -189,72 +356,33 @@ const getStudentCases = async (req, res) => {
   }
 };
 
-// Get single case by ID
 const getCaseById = async (req, res) => {
   try {
-    const { id } = req.params;
+    const caseRow = await loadCaseOrThrow(req, res);
+    if (!caseRow) return;
 
-    const caseQuery = `
-      SELECT 
-        c.*,
-        p.patient_code,
-        CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-        p.date_of_birth as patient_dob,
-        p.gender as patient_gender,
-        p.phone as patient_phone,
-        student.name as student_name,
-        student.email as student_email,
-        supervisor.name as supervisor_name,
-        supervisor.email as supervisor_email
-      FROM cases c
-      LEFT JOIN patients p ON c.patient_id = p.id
-      LEFT JOIN users student ON c.student_id = student.id
-      LEFT JOIN users supervisor ON c.supervisor_id = supervisor.id
-      WHERE c.id = ?
-    `;
-
-    const cases = await query(caseQuery, [id]);
-
-    if (cases.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Case not found'
-      });
-    }
-
-    const caseData = cases[0];
-    caseData.patient_age = Math.floor((new Date() - new Date(caseData.patient_dob)) / (365.25 * 24 * 60 * 60 * 1000));
-
-    // Get related clinical notes
-    const notesQuery = `
-      SELECT 
-        cn.*,
-        u.name as author_name
-      FROM clinical_notes cn
-      LEFT JOIN users u ON cn.author_id = u.id
-      WHERE cn.patient_id = ?
-      ORDER BY cn.created_at DESC
-    `;
-    const notes = await query(notesQuery, [caseData.patient_id]);
-
-    // Get related visits
-    const visitsQuery = `
-      SELECT 
-        v.*,
-        u.name as provider_name
-      FROM visits v
-      LEFT JOIN users u ON v.provider_id = u.id
-      WHERE v.patient_id = ?
-      ORDER BY v.visit_date DESC
-    `;
-    const visits = await query(visitsQuery, [caseData.patient_id]);
+    const [tasks, logs] = await Promise.all([
+      getCaseTasks(Number(caseRow.id)),
+      query(
+        `SELECT l.*, u.name AS actor_name
+         FROM case_progress_logs l
+         INNER JOIN users u ON u.id = l.actor_id
+         WHERE l.case_id = ?
+         ORDER BY l.created_at ASC, l.id ASC`,
+        [Number(caseRow.id)]
+      )
+    ]);
 
     res.json({
       success: true,
       data: {
-        case: caseData,
-        clinical_notes: notes,
-        visits: visits
+        case: caseRow,
+        tasks,
+        logbook: logs.map((row) => ({
+          ...row,
+          progress_percentage: row.progress_percentage === null ? null : Number(row.progress_percentage),
+          metadata: parseRequirements(row.metadata)
+        }))
       }
     });
   } catch (error) {
@@ -266,78 +394,41 @@ const getCaseById = async (req, res) => {
   }
 };
 
-// Create new case
 const createCase = async (req, res) => {
   try {
-    const caseData = req.body;
-
-    // Check if patient exists
-    const patient = await findOne('patients', { id: caseData.patient_id, deleted_at: null });
-    if (!patient) {
-      return res.status(404).json({
+    if (!['ORTHODONTIST', 'DENTAL_SURGEON'].includes(req.user.role)) {
+      return res.status(403).json({
         success: false,
-        message: 'Patient not found'
+        message: 'Student cases are created from supervisor assignments'
       });
     }
 
-    // Check if student exists and is active
-    const student = await findOne('users', { id: caseData.student_id, role: 'STUDENT', status: 'ACTIVE' });
-    if (!student) {
+    const patient = await findOne('patients', { id: Number(req.body.patient_id), deleted_at: null });
+    const student = await findOne('users', { id: Number(req.body.student_id), role: 'STUDENT', status: 'ACTIVE' });
+    if (!patient || !student || Number(req.body.supervisor_id) !== Number(req.user.id)) {
       return res.status(400).json({
         success: false,
-        message: 'Student not found or inactive'
+        message: 'Invalid patient, student, or supervisor'
       });
     }
 
-    // Check if supervisor exists and is active
-    const supervisor = await findOne('users', { id: caseData.supervisor_id, status: 'ACTIVE' });
-    if (!supervisor) {
-      return res.status(400).json({
-        success: false,
-        message: 'Supervisor not found or inactive'
-      });
-    }
-
-    // Check if case already exists for this patient and student
-    const existingCase = await findOne('cases', { 
-      patient_id: caseData.patient_id, 
-      student_id: caseData.student_id,
-      status: ['ASSIGNED', 'PENDING_VERIFICATION']
+    const result = await ensureStudentCaseForAssignment({
+      patientId: Number(req.body.patient_id),
+      studentId: Number(req.body.student_id),
+      supervisorId: Number(req.user.id),
+      supervisorRole: req.user.role,
+      assignedBy: Number(req.user.id)
     });
-    
-    if (existingCase) {
-      return res.status(400).json({
-        success: false,
-        message: 'Active case already exists for this patient and student'
-      });
-    }
 
-    // Create case
-    const caseId = await insert('cases', caseData);
+    const createdCase = await loadCaseOrThrow({ ...req, params: { id: result.caseId } }, res);
+    if (!createdCase) return;
 
-    await logAuditEvent(req.user.id, 'CREATE', 'CASE', caseId, null, caseData);
+    await logAuditEvent(req.user.id, result.created ? 'CREATE' : 'UPDATE', 'CASE', result.caseId, null, req.body);
 
-    // Return created case with details
-    const createdCaseQuery = `
-      SELECT 
-        c.*,
-        p.patient_code,
-        CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-        student.name as student_name,
-        supervisor.name as supervisor_name
-      FROM cases c
-      LEFT JOIN patients p ON c.patient_id = p.id
-      LEFT JOIN users student ON c.student_id = student.id
-      LEFT JOIN users supervisor ON c.supervisor_id = supervisor.id
-      WHERE c.id = ?
-    `;
-
-    const createdCases = await query(createdCaseQuery, [caseId]);
-
-    res.status(201).json({
+    res.status(result.created ? 201 : 200).json({
       success: true,
-      message: 'Case created successfully',
-      data: createdCases[0]
+      message: result.created ? 'Case created successfully' : 'Case already existed and was reused',
+      data: createdCase
     });
   } catch (error) {
     console.error('Create case error:', error);
@@ -348,63 +439,59 @@ const createCase = async (req, res) => {
   }
 };
 
-// Update case
 const updateCase = async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Student case progress is task-based. Direct case editing is not allowed.'
+  });
+};
+
+const assignCaseTask = async (req, res) => {
   try {
-    const { id } = req.params;
-    const updateData = req.body;
+    const caseRow = await loadCaseOrThrow(req, res);
+    if (!caseRow) return;
+    if (!requireSupervisorRole(req, res, caseRow)) return;
 
-    // Check if case exists
-    const existingCase = await findOne('cases', { id });
-    if (!existingCase) {
-      return res.status(404).json({
-        success: false,
-        message: 'Case not found'
-      });
-    }
+    const title = String(req.body.title || '').trim();
+    const description = String(req.body.description || '').trim() || null;
+    const deadlineAt = req.body.deadline_at || null;
 
-    // If updating to PENDING_VERIFICATION, add verification timestamp
-    if (updateData.status === 'PENDING_VERIFICATION' && existingCase.status !== 'PENDING_VERIFICATION') {
-      updateData.submitted_for_verification_at = new Date();
-    }
+    const taskId = await insert('case_tasks', {
+      case_id: Number(caseRow.id),
+      patient_id: Number(caseRow.patient_id),
+      student_id: Number(caseRow.student_id),
+      supervisor_id: Number(caseRow.supervisor_id),
+      title,
+      description,
+      deadline_at: deadlineAt,
+      status: 'ASSIGNED',
+      created_by: Number(req.user.id)
+    });
 
-    // If updating to VERIFIED, set verifier info
-    if (updateData.status === 'VERIFIED' && existingCase.status !== 'VERIFIED') {
-      updateData.verified_by = req.user.id;
-      updateData.verified_at = new Date();
-    }
+    await logCaseEvent({
+      caseId: caseRow.id,
+      patientId: caseRow.patient_id,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+      logType: 'SYSTEM_NOTE',
+      title: `Supervisor assigned task: ${title}`,
+      entryText: description,
+      metadata: { task_id: taskId, deadline_at: deadlineAt }
+    });
 
-    // Update case
-    await update('cases', updateData, { id });
+    await logAuditEvent(req.user.id, 'CREATE', 'CASE_TASK', taskId, null, {
+      case_id: caseRow.id,
+      title,
+      deadline_at: deadlineAt
+    });
 
-    await logAuditEvent(req.user.id, 'UPDATE', 'CASE', id, existingCase, updateData);
-
-    // Return updated case with details
-    const updatedCaseQuery = `
-      SELECT 
-        c.*,
-        p.patient_code,
-        CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-        student.name as student_name,
-        supervisor.name as supervisor_name,
-        verifier.name as verifier_name
-      FROM cases c
-      LEFT JOIN patients p ON c.patient_id = p.id
-      LEFT JOIN users student ON c.student_id = student.id
-      LEFT JOIN users supervisor ON c.supervisor_id = supervisor.id
-      LEFT JOIN users verifier ON c.verified_by = verifier.id
-      WHERE c.id = ?
-    `;
-
-    const updatedCases = await query(updatedCaseQuery, [id]);
-
-    res.json({
+    res.status(201).json({
       success: true,
-      message: 'Case updated successfully',
-      data: updatedCases[0]
+      message: 'Task assigned successfully',
+      data: (await getCaseTasks(Number(caseRow.id))).find((task) => Number(task.id) === Number(taskId)) || null
     });
   } catch (error) {
-    console.error('Update case error:', error);
+    console.error('Assign case task error:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -412,36 +499,206 @@ const updateCase = async (req, res) => {
   }
 };
 
-// Delete case
-const deleteCase = async (req, res) => {
+const updateCaseTask = async (req, res) => {
   try {
-    const { id } = req.params;
+    const caseRow = await loadCaseOrThrow(req, res);
+    if (!caseRow) return;
+    if (!requireStudentRole(req, res, caseRow)) return;
 
-    // Check if case exists
-    const existingCase = await findOne('cases', { id });
-    if (!existingCase) {
+    const taskId = Number(req.params.taskId);
+    const existingTask = await findOne('case_tasks', { id: taskId, case_id: Number(caseRow.id) });
+    if (!existingTask) {
       return res.status(404).json({
         success: false,
-        message: 'Case not found'
+        message: 'Task not found'
       });
     }
 
-    // Only allow deletion of assigned cases (not verified ones)
-    if (existingCase.status === 'VERIFIED') {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete verified cases'
-      });
+    const status = normalizeTaskStatus(req.body.status, existingTask.status);
+    const completionNotes = req.body.completion_notes !== undefined
+      ? String(req.body.completion_notes || '').trim() || null
+      : existingTask.completion_notes;
+
+    const updates = {
+      status,
+      completion_notes: completionNotes
+    };
+
+    if (status === 'COMPLETED') {
+      updates.completed_at = new Date();
+    } else if (status === 'ASSIGNED' || status === 'IN_PROGRESS') {
+      updates.completed_at = null;
+      updates.reviewed_at = null;
+      updates.reviewed_by = null;
+      updates.review_notes = null;
     }
 
-    // Delete case
-    await remove('cases', { id }, false);
+    await update('case_tasks', updates, { id: taskId });
 
-    await logAuditEvent(req.user.id, 'DELETE', 'CASE', id, existingCase, null);
+    await logCaseEvent({
+      caseId: caseRow.id,
+      patientId: caseRow.patient_id,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+      logType: 'STUDENT_PROGRESS',
+      title: `Student marked task "${existingTask.title}" as ${status}`,
+      entryText: completionNotes,
+      metadata: { task_id: taskId, task_status: status }
+    });
+
+    await logAuditEvent(req.user.id, 'UPDATE', 'CASE_TASK', taskId, existingTask, updates);
 
     res.json({
       success: true,
-      message: 'Case deleted successfully'
+      message: 'Task progress updated successfully',
+      data: (await getCaseTasks(Number(caseRow.id))).find((task) => Number(task.id) === Number(taskId)) || null
+    });
+  } catch (error) {
+    console.error('Update case task error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+const reviewCaseTask = async (req, res) => {
+  try {
+    const caseRow = await loadCaseOrThrow(req, res);
+    if (!caseRow) return;
+    if (!requireSupervisorRole(req, res, caseRow)) return;
+
+    const taskId = Number(req.params.taskId);
+    const existingTask = await findOne('case_tasks', { id: taskId, case_id: Number(caseRow.id) });
+    if (!existingTask) {
+      return res.status(404).json({
+        success: false,
+        message: 'Task not found'
+      });
+    }
+
+    const reviewNotes = String(req.body.review_notes || '').trim();
+    const status = normalizeTaskStatus(req.body.status, 'REVIEWED');
+    const updates = {
+      review_notes: reviewNotes || null,
+      reviewed_by: Number(req.user.id),
+      reviewed_at: new Date(),
+      status
+    };
+
+    await update('case_tasks', updates, { id: taskId });
+
+    await logCaseEvent({
+      caseId: caseRow.id,
+      patientId: caseRow.patient_id,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+      logType: 'SUPERVISOR_REVIEW',
+      title: `Supervisor reviewed task "${existingTask.title}"`,
+      entryText: reviewNotes || null,
+      evaluation: status,
+      metadata: { task_id: taskId }
+    });
+
+    await logAuditEvent(req.user.id, 'REVIEW', 'CASE_TASK', taskId, existingTask, updates);
+
+    res.json({
+      success: true,
+      message: 'Task review recorded successfully',
+      data: (await getCaseTasks(Number(caseRow.id))).find((task) => Number(task.id) === Number(taskId)) || null
+    });
+  } catch (error) {
+    console.error('Review case task error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+const deleteCaseTask = async (req, res) => {
+  try {
+    const caseRow = await loadCaseOrThrow(req, res);
+    if (!caseRow) return;
+    if (!requireSupervisorRole(req, res, caseRow)) return;
+
+    const taskId = Number(req.params.taskId);
+    const existingTask = await findOne('case_tasks', { id: taskId, case_id: Number(caseRow.id) });
+    if (!existingTask) {
+      return res.status(404).json({
+        success: false,
+        message: 'Task not found'
+      });
+    }
+
+    await logCaseEvent({
+      caseId: caseRow.id,
+      patientId: caseRow.patient_id,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+      logType: 'SYSTEM_NOTE',
+      title: `Supervisor deleted task "${existingTask.title}"`,
+      entryText: existingTask.description || null,
+      metadata: {
+        task_id: taskId,
+        deleted_task: {
+          title: existingTask.title,
+          status: existingTask.status,
+          completion_notes: existingTask.completion_notes,
+          review_notes: existingTask.review_notes
+        }
+      }
+    });
+
+    await remove('case_tasks', { id: taskId }, false);
+    await logAuditEvent(req.user.id, 'DELETE', 'CASE_TASK', taskId, existingTask, null);
+
+    res.json({
+      success: true,
+      message: 'Task deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete case task error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+const addCaseProgress = async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Student progress is tracked through assigned tasks'
+  });
+};
+
+const addCaseReview = async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Supervisor review is tracked through task reviews'
+  });
+};
+
+const deleteCase = async (req, res) => {
+  try {
+    const caseRow = await loadCaseOrThrow(req, res);
+    if (!caseRow) return;
+    if (!requireSupervisorOrAdminRole(req, res, caseRow)) return;
+
+    if (caseRow.student_assignment_active) {
+      return res.status(400).json({
+        success: false,
+        message: 'Remove the student from the patient care team before deleting this student case.'
+      });
+    }
+
+    await remove('cases', { id: Number(caseRow.id) }, false);
+    await logAuditEvent(req.user.id, 'DELETE', 'CASE', Number(caseRow.id), caseRow, null);
+
+    res.json({
+      success: true,
+      message: 'Removed student case deleted successfully'
     });
   } catch (error) {
     console.error('Delete case error:', error);
@@ -452,80 +709,38 @@ const deleteCase = async (req, res) => {
   }
 };
 
-// Get case statistics
 const getCaseStats = async (req, res) => {
   try {
-    const { period = 'month' } = req.query;
-
-    let dateFilter;
-    switch (period) {
-      case 'week':
-        dateFilter = 'DATE_SUB(NOW(), INTERVAL 1 WEEK)';
-        break;
-      case 'month':
-        dateFilter = 'DATE_SUB(NOW(), INTERVAL 1 MONTH)';
-        break;
-      case 'year':
-        dateFilter = 'DATE_SUB(NOW(), INTERVAL 1 YEAR)';
-        break;
-      default:
-        dateFilter = 'DATE_SUB(NOW(), INTERVAL 1 MONTH)';
-    }
-
-    const statsQuery = `
-      SELECT 
-        COUNT(*) as total_cases,
-        COUNT(CASE WHEN status = 'ASSIGNED' THEN 1 END) as assigned_cases,
-        COUNT(CASE WHEN status = 'PENDING_VERIFICATION' THEN 1 END) as pending_cases,
-        COUNT(CASE WHEN status = 'VERIFIED' THEN 1 END) as verified_cases,
-        COUNT(CASE WHEN status = 'REJECTED' THEN 1 END) as rejected_cases,
-        COUNT(DISTINCT student_id) as active_students
-      FROM cases 
-      WHERE created_at >= ${dateFilter}
-    `;
-
-    const stats = await query(statsQuery);
-
-    // Student performance
-    const studentStatsQuery = `
-      SELECT 
-        u.name as student_name,
-        COUNT(*) as total_cases,
-        COUNT(CASE WHEN c.status = 'VERIFIED' THEN 1 END) as verified_cases,
-        ROUND(
-          (COUNT(CASE WHEN c.status = 'VERIFIED' THEN 1 END) / 
-          NULLIF(COUNT(*), 0)) * 100, 2
-        ) as success_rate
-      FROM cases c
-      LEFT JOIN users u ON c.student_id = u.id
-      WHERE c.created_at >= ${dateFilter}
-      GROUP BY c.student_id, u.name
-      ORDER BY verified_cases DESC
-      LIMIT 10
-    `;
-
-    const studentStats = await query(studentStatsQuery);
-
-    // Monthly case trends
-    const monthlyTrendsQuery = `
-      SELECT 
-        DATE_FORMAT(created_at, '%Y-%m') as month,
-        COUNT(*) as new_cases,
-        COUNT(CASE WHEN status = 'VERIFIED' THEN 1 END) as verified_cases
-      FROM cases 
-      WHERE created_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
-      GROUP BY DATE_FORMAT(created_at, '%Y-%m')
-      ORDER BY month ASC
-    `;
-
-    const monthlyTrends = await query(monthlyTrendsQuery);
+    const scope = buildScopedCaseFilter(req.user);
+    const rows = await query(
+      `SELECT
+         COUNT(*) AS total_cases,
+         SUM(COALESCE(task_summary.total_tasks, 0)) AS total_tasks,
+         SUM(COALESCE(task_summary.completed_tasks, 0)) AS completed_tasks,
+         SUM(COALESCE(task_summary.reviewed_tasks, 0)) AS reviewed_tasks,
+         SUM(COALESCE(task_summary.pending_tasks, 0)) AS pending_tasks,
+         SUM(COALESCE(task_summary.overdue_tasks, 0)) AS overdue_tasks,
+         ROUND(AVG(COALESCE(task_summary.progress_percentage, 0)), 0) AS avg_progress,
+         COUNT(DISTINCT c.student_id) AS active_students
+       FROM cases c
+       ${getTaskSummaryJoin()}
+       WHERE ${scope.clause}`,
+      scope.params
+    );
 
     res.json({
       success: true,
       data: {
-        overview: stats[0],
-        student_performance: studentStats,
-        monthly_trends: monthlyTrends
+        overview: {
+          ...rows[0],
+          total_cases: Number(rows[0]?.total_cases || 0),
+          total_tasks: Number(rows[0]?.total_tasks || 0),
+          completed_tasks: Number(rows[0]?.completed_tasks || 0),
+          reviewed_tasks: Number(rows[0]?.reviewed_tasks || 0),
+          pending_tasks: Number(rows[0]?.pending_tasks || 0),
+          overdue_tasks: Number(rows[0]?.overdue_tasks || 0),
+          avg_progress: Number(rows[0]?.avg_progress || 0)
+        }
       }
     });
   } catch (error) {
@@ -543,6 +758,12 @@ module.exports = {
   getCaseById,
   createCase,
   updateCase,
+  assignCaseTask,
+  updateCaseTask,
+  reviewCaseTask,
+  deleteCaseTask,
+  addCaseProgress,
+  addCaseReview,
   deleteCase,
   getCaseStats
 };

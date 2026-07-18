@@ -63,6 +63,7 @@ class ApiClient {
   private baseURL: string;
   private accessToken: string | null = null;
   private refreshToken: string | null = null;
+  private refreshPromise: Promise<boolean> | null = null;
 
   constructor() {
     this.baseURL = API_CONFIG.BASE_URL;
@@ -87,6 +88,33 @@ class ApiClient {
     this.refreshToken = null;
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
+  }
+
+  private shouldAttemptTokenRefresh(endpoint: string): boolean {
+    const authEndpointsWithoutRefresh = new Set<string>([
+      API_ENDPOINTS.AUTH.LOGIN,
+      API_ENDPOINTS.AUTH.GOOGLE,
+      API_ENDPOINTS.AUTH.REFRESH,
+      API_ENDPOINTS.AUTH.LOGOUT,
+    ]);
+
+    return Boolean(this.refreshToken) && !authEndpointsWithoutRefresh.has(endpoint);
+  }
+
+  private async fetchWithTimeout(url: string, config: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, API_CONFIG.TIMEOUT);
+
+    try {
+      return await fetch(url, {
+        ...config,
+        signal: controller.signal,
+      });
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   // Request helper
@@ -118,11 +146,11 @@ class ApiClient {
     }
 
     try {
-      const response = await fetch(url, config);
+      const response = await this.fetchWithTimeout(url, config);
       const data = await response.json();
 
       // Handle 401 Unauthorized - try refresh token
-      if (response.status === HTTP_STATUS.UNAUTHORIZED && this.refreshToken) {
+      if (response.status === HTTP_STATUS.UNAUTHORIZED && this.shouldAttemptTokenRefresh(endpoint)) {
         const refreshSuccess = await this.refreshAccessToken();
         if (refreshSuccess) {
           // Retry original request with new token
@@ -130,12 +158,14 @@ class ApiClient {
             ...config.headers,
             Authorization: `Bearer ${this.accessToken}`,
           };
-          const retryResponse = await fetch(url, config);
+          const retryResponse = await this.fetchWithTimeout(url, config);
           return await retryResponse.json();
         } else {
           // Refresh failed, clear tokens and redirect to login
           this.clearTokensFromStorage();
-          window.location.href = '/login';
+          if (window.location.pathname !== '/login') {
+            window.location.assign('/login');
+          }
           throw new Error(ERROR_MESSAGES.UNAUTHORIZED);
         }
       }
@@ -148,14 +178,30 @@ class ApiClient {
       return data;
     } catch (error) {
       console.error('API Request Error:', error);
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error('The server is taking too long to respond. If this is a free Render service, wait a moment and try again.');
+      }
       throw error;
     }
   }
 
   // Refresh access token
   private async refreshAccessToken(): Promise<boolean> {
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = this.performRefreshAccessToken();
     try {
-      const response = await fetch(`${this.baseURL}${API_ENDPOINTS.AUTH.REFRESH}`, {
+      return await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  private async performRefreshAccessToken(): Promise<boolean> {
+    try {
+      const response = await this.fetchWithTimeout(`${this.baseURL}${API_ENDPOINTS.AUTH.REFRESH}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -178,6 +224,7 @@ class ApiClient {
     } catch (error) {
       console.error('Token refresh failed:', error);
     }
+    this.clearTokensFromStorage();
     return false;
   }
 
@@ -576,6 +623,14 @@ export const apiService = {
     
     getToday: () => 
       apiClient.get<any[]>(API_ENDPOINTS.VISITS.TODAY),
+
+    getUpcoming: (params?: { limit?: number }) => {
+      const query = new URLSearchParams();
+      if (params?.limit) query.append('limit', params.limit.toString());
+
+      const queryString = query.toString();
+      return apiClient.get<any[]>(`${API_ENDPOINTS.VISITS.UPCOMING}${queryString ? `?${queryString}` : ''}`);
+    },
     
     getStats: () => 
       apiClient.get(API_ENDPOINTS.VISITS.STATS),
@@ -685,10 +740,10 @@ export const apiService = {
       data: {
         payment_date: string;
         amount: number;
-        currency?: string;
+        currency: string;
         payment_method: string;
-        status?: string;
-        reference_number?: string;
+        status: string;
+        reference_number: string;
         notes?: string;
       }
     ) => apiClient.post(API_ENDPOINTS.PAYMENT_RECORDS.CREATE(patientId), data),
@@ -755,8 +810,13 @@ export const apiService = {
 
   // Queue
   queue: {
-    getList: () => 
-      apiClient.get<any>(API_ENDPOINTS.QUEUE.LIST),
+    getList: (params?: { scope?: 'assigned' }) => {
+      const query = new URLSearchParams();
+      if (params?.scope) query.append('scope', params.scope);
+
+      const queryString = query.toString();
+      return apiClient.get<any>(`${API_ENDPOINTS.QUEUE.LIST}${queryString ? `?${queryString}` : ''}`);
+    },
 
     getStats: () =>
       apiClient.get<any>(API_ENDPOINTS.QUEUE.STATS),
@@ -773,24 +833,84 @@ export const apiService = {
 
   // Cases
   cases: {
-    getList: (params?: { page?: number; limit?: number; status?: string }) => {
+    getList: (params?: { page?: number; limit?: number; status?: string; search?: string; student_id?: string | number; supervisor_id?: string | number }) => {
+      const query = new URLSearchParams();
+      if (params?.page) query.append('page', params.page.toString());
+      if (params?.limit) query.append('limit', params.limit.toString());
+      if (params?.status) query.append('status', params.status);
+      if (params?.search) query.append('search', params.search);
+      if (params?.student_id !== undefined && params?.student_id !== '') query.append('student_id', String(params.student_id));
+      if (params?.supervisor_id !== undefined && params?.supervisor_id !== '') query.append('supervisor_id', String(params.supervisor_id));
+      
+      const queryString = query.toString();
+      return apiClient.get<PaginatedResponse<any>>(`${API_ENDPOINTS.CASES.LIST}${queryString ? `?${queryString}` : ''}`);
+    },
+
+    getById: (id: string) =>
+      apiClient.get<any>(API_ENDPOINTS.CASES.DETAIL(id)),
+    
+    getStudentCases: (studentId: string, params?: { page?: number; limit?: number; status?: string }) => {
       const query = new URLSearchParams();
       if (params?.page) query.append('page', params.page.toString());
       if (params?.limit) query.append('limit', params.limit.toString());
       if (params?.status) query.append('status', params.status);
       
       const queryString = query.toString();
-      return apiClient.get<PaginatedResponse<any>>(`${API_ENDPOINTS.CASES.LIST}${queryString ? `?${queryString}` : ''}`);
-    },
-    
-    getStudentCases: (studentId: string, params?: { page?: number; limit?: number }) => {
-      const query = new URLSearchParams();
-      if (params?.page) query.append('page', params.page.toString());
-      if (params?.limit) query.append('limit', params.limit.toString());
-      
-      const queryString = query.toString();
       return apiClient.get<PaginatedResponse<any>>(`${API_ENDPOINTS.CASES.STUDENT_CASES(studentId)}${queryString ? `?${queryString}` : ''}`);
     },
+
+    addProgress: (
+      id: string,
+      data: {
+        progress_notes: string;
+        progress_percentage?: number;
+        requirements_met?: Record<string, any>;
+        submit_for_review?: boolean;
+      }
+    ) => apiClient.post<any>(API_ENDPOINTS.CASES.PROGRESS(id), data),
+
+    addReview: (
+      id: string,
+      data: {
+        supervisor_feedback?: string;
+        evaluation?: string;
+        recommendations?: string;
+        status?: string;
+      }
+    ) => apiClient.post<any>(API_ENDPOINTS.CASES.REVIEWS(id), data),
+
+    assignTask: (
+      id: string,
+      data: {
+        title: string;
+        description?: string;
+        deadline_at?: string;
+      }
+    ) => apiClient.post<any>(API_ENDPOINTS.CASES.TASKS(id), data),
+
+    updateTask: (
+      id: string,
+      taskId: string,
+      data: {
+        status: string;
+        completion_notes?: string;
+      }
+    ) => apiClient.put<any>(API_ENDPOINTS.CASES.TASK_DETAIL(id, taskId), data),
+
+    reviewTask: (
+      id: string,
+      taskId: string,
+      data: {
+        review_notes?: string;
+        status?: string;
+      }
+    ) => apiClient.post<any>(API_ENDPOINTS.CASES.TASK_REVIEW(id, taskId), data),
+
+    deleteTask: (id: string, taskId: string) =>
+      apiClient.delete<any>(API_ENDPOINTS.CASES.TASK_DELETE(id, taskId)),
+
+    deleteCase: (id: string) =>
+      apiClient.delete<any>(API_ENDPOINTS.CASES.DELETE(id)),
 
     getStats: () =>
       apiClient.get<any>(API_ENDPOINTS.CASES.STATS),
@@ -858,6 +978,17 @@ export const apiService = {
     },
     inventoryAlerts: (alert_type?: string) =>
       apiClient.get<any>(`${API_ENDPOINTS.REPORTS.INVENTORY_ALERTS}${alert_type ? `?alert_type=${alert_type}` : ''}`),
+    summaryPatients: (params: {
+      metric: 'total_patients' | 'active_patients' | 'visits_in_period';
+      start_date?: string;
+      end_date?: string;
+    }) => {
+      const query = new URLSearchParams();
+      query.append('metric', params.metric);
+      if (params.start_date) query.append('start_date', params.start_date);
+      if (params.end_date) query.append('end_date', params.end_date);
+      return apiClient.get<any>(`${API_ENDPOINTS.REPORTS.SUMMARY_PATIENTS}?${query.toString()}`);
+    },
     auditLogs: (params?: {
       page?: number;
       limit?: number;

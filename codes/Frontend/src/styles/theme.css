@@ -181,3 +181,55 @@
     line-height: 1.5;
   }
 }
+
+@layer utilities {
+  .orthoflow-scroll-region {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (orientation: portrait) and (min-width: 700px) and (max-width: 1180px) and (pointer: coarse) {
+  .orthoflow-login-screen {
+    min-height: 100svh;
+    min-height: 100dvh;
+    padding-block: 0;
+  }
+
+  .orthoflow-login-card {
+    max-width: min(88vw, 36rem);
+    padding: 3rem;
+  }
+
+  .orthoflow-login-logo {
+    width: 6rem;
+    height: 6rem;
+    border-radius: 1.75rem;
+  }
+
+  .orthoflow-login-logo-icon {
+    width: 4.25rem;
+    height: 4.25rem;
+  }
+
+  .dental-chart-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .dental-chart-legend {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (orientation: landscape) and (min-width: 900px) and (max-width: 1368px) and (pointer: coarse) {
+  .orthoflow-main-scroll {
+    padding-bottom: 8rem;
+  }
+}
+
+.hide-native-date-picker::-webkit-calendar-picker-indicator {
+  display: none;
+  opacity: 0;
+  -webkit-appearance: none;
+}

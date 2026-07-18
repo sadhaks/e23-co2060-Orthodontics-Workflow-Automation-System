@@ -31,6 +31,11 @@ router.get('/dashboard',
   asyncHandler(reportController.getDashboardReport)
 );
 
+// GET /api/reports/summary-patients - Get drill-down patient lists for report summary cards
+router.get('/summary-patients',
+  asyncHandler(reportController.getSummaryPatientList)
+);
+
 // GET /api/reports/audit-logs - Get system audit logs (admin only)
 router.get('/audit-logs',
   asyncHandler(reportController.getAuditLogsReport)

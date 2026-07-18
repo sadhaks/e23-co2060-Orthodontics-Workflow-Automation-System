@@ -32,7 +32,7 @@ router.get('/orthodontists',
 
 // GET /api/patients/assignable-staff - Get assignable staff for patient care team
 router.get('/assignable-staff',
-  authorizeRoles('RECEPTION', 'ORTHODONTIST'),
+  authorizeRoles('RECEPTION', 'ORTHODONTIST', 'DENTAL_SURGEON'),
   asyncHandler(patientController.getAssignableStaff)
 );
 
@@ -88,7 +88,7 @@ router.get('/:id/assignments',
 
 // POST /api/patients/:id/assignments - Assign care-team member to patient
 router.post('/:id/assignments',
-  authorizeRoles('RECEPTION', 'ORTHODONTIST'),
+  authorizeRoles('RECEPTION', 'ORTHODONTIST', 'DENTAL_SURGEON'),
   validate(schemas.assignPatientMember),
   asyncHandler(patientController.assignPatientMember)
 );

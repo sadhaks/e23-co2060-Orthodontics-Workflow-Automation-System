@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise');
+const { buildMysqlSslConfig } = require('./mysqlSsl');
 require('dotenv').config();
 
 const dbConfig = {
@@ -13,7 +14,8 @@ const dbConfig = {
   charset: 'utf8mb4',
   // Keep DATE/DATETIME/TIMESTAMP values as DB strings to avoid timezone shifts
   // when API serializes Date objects to ISO strings.
-  dateStrings: true
+  dateStrings: true,
+  ssl: buildMysqlSslConfig()
 };
 
 // Create connection pool
@@ -223,6 +225,16 @@ const ensureAccessControlSchema = async () => {
   }
   if (!documentColumnSet.has('deleted_by')) {
     await query('ALTER TABLE medical_documents ADD COLUMN deleted_by INT NULL DEFAULT NULL');
+  }
+  if (!documentColumnSet.has('storage_provider')) {
+    await query("ALTER TABLE medical_documents ADD COLUMN storage_provider ENUM('local', 's3') NOT NULL DEFAULT 'local' AFTER file_path");
+  }
+  if (!documentColumnSet.has('storage_bucket')) {
+    await query('ALTER TABLE medical_documents ADD COLUMN storage_bucket VARCHAR(255) NULL AFTER storage_provider');
+  }
+  if (!documentColumnSet.has('storage_key')) {
+    await query('ALTER TABLE medical_documents ADD COLUMN storage_key VARCHAR(700) NULL AFTER storage_bucket');
+    await query('CREATE INDEX idx_medical_documents_storage_key ON medical_documents (storage_key(191))');
   }
 
   const inventoryColumns = await query(`
@@ -483,6 +495,166 @@ const ensureAccessControlSchema = async () => {
   `);
   if (!reminderIndexRows.length) {
     await query('CREATE INDEX idx_visits_reminder_window ON visits (status, reminder_sent_at, visit_date)');
+  }
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS cases (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      patient_id INT NOT NULL,
+      student_id INT NOT NULL,
+      supervisor_id INT NOT NULL,
+      assigned_by INT NULL,
+      status ENUM('ASSIGNED', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED') DEFAULT 'ASSIGNED',
+      progress_notes TEXT NULL,
+      progress_percentage INT NOT NULL DEFAULT 0,
+      requirements_met JSON NULL,
+      supervisor_feedback TEXT NULL,
+      latest_evaluation TEXT NULL,
+      latest_recommendation TEXT NULL,
+      submitted_for_verification_at TIMESTAMP NULL DEFAULT NULL,
+      verified_by INT NULL DEFAULT NULL,
+      verified_at TIMESTAMP NULL DEFAULT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+      FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (verified_by) REFERENCES users(id) ON DELETE SET NULL,
+      INDEX idx_student_id (student_id),
+      INDEX idx_supervisor_id (supervisor_id),
+      INDEX idx_status (status),
+      INDEX idx_patient_id (patient_id)
+    )
+  `);
+
+  const caseColumns = await query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'cases'
+  `);
+  const caseColumnSet = new Set(caseColumns.map((row) => row.COLUMN_NAME));
+
+  if (!caseColumnSet.has('assigned_by')) {
+    await query('ALTER TABLE cases ADD COLUMN assigned_by INT NULL DEFAULT NULL AFTER supervisor_id');
+  }
+  if (!caseColumnSet.has('progress_percentage')) {
+    await query('ALTER TABLE cases ADD COLUMN progress_percentage INT NOT NULL DEFAULT 0 AFTER progress_notes');
+  }
+  if (!caseColumnSet.has('latest_evaluation')) {
+    await query('ALTER TABLE cases ADD COLUMN latest_evaluation TEXT NULL AFTER supervisor_feedback');
+  }
+  if (!caseColumnSet.has('latest_recommendation')) {
+    await query('ALTER TABLE cases ADD COLUMN latest_recommendation TEXT NULL AFTER latest_evaluation');
+  }
+  if (!caseColumnSet.has('submitted_for_verification_at')) {
+    await query('ALTER TABLE cases ADD COLUMN submitted_for_verification_at TIMESTAMP NULL DEFAULT NULL AFTER latest_recommendation');
+  }
+  if (!caseColumnSet.has('verified_by')) {
+    await query('ALTER TABLE cases ADD COLUMN verified_by INT NULL DEFAULT NULL AFTER submitted_for_verification_at');
+  }
+  if (!caseColumnSet.has('verified_at')) {
+    await query('ALTER TABLE cases ADD COLUMN verified_at TIMESTAMP NULL DEFAULT NULL AFTER verified_by');
+  }
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS case_progress_logs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      case_id INT NOT NULL,
+      patient_id INT NOT NULL,
+      actor_id INT NOT NULL,
+      actor_role ENUM('ADMIN', 'ORTHODONTIST', 'DENTAL_SURGEON', 'NURSE', 'STUDENT', 'RECEPTION') NOT NULL,
+      log_type ENUM('ASSIGNED', 'STUDENT_PROGRESS', 'SUPERVISOR_REVIEW', 'STATUS_CHANGE', 'SYSTEM_NOTE') NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      entry_text TEXT NULL,
+      progress_percentage INT NULL,
+      evaluation TEXT NULL,
+      recommendations TEXT NULL,
+      status_from ENUM('ASSIGNED', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED') NULL,
+      status_to ENUM('ASSIGNED', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED') NULL,
+      metadata JSON NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE,
+      FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+      FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE RESTRICT,
+      INDEX idx_case_progress_logs_case (case_id, created_at),
+      INDEX idx_case_progress_logs_patient (patient_id, created_at),
+      INDEX idx_case_progress_logs_type (log_type)
+    )
+  `);
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS case_tasks (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      case_id INT NOT NULL,
+      patient_id INT NOT NULL,
+      student_id INT NOT NULL,
+      supervisor_id INT NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      description TEXT NULL,
+      deadline_at DATETIME NULL,
+      status ENUM('ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'REVIEWED') NOT NULL DEFAULT 'ASSIGNED',
+      completion_notes TEXT NULL,
+      completed_at DATETIME NULL,
+      reviewed_by INT NULL DEFAULT NULL,
+      reviewed_at DATETIME NULL,
+      review_notes TEXT NULL,
+      created_by INT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE,
+      FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
+      FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (supervisor_id) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+      INDEX idx_case_tasks_case (case_id, status, deadline_at),
+      INDEX idx_case_tasks_student (student_id, status),
+      INDEX idx_case_tasks_supervisor (supervisor_id, status)
+    )
+  `);
+
+  const queueStatusColumns = await query(`
+    SELECT COLUMN_TYPE
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'queue'
+      AND COLUMN_NAME = 'status'
+    LIMIT 1
+  `);
+  const queueStatusColumnType = queueStatusColumns[0]?.COLUMN_TYPE || '';
+  if (queueStatusColumnType && !queueStatusColumnType.includes('IN_WAITING_ROOM')) {
+    await query(`
+      ALTER TABLE queue
+      MODIFY COLUMN status ENUM(
+        'WAITING',
+        'PREPARATION',
+        'IN_TREATMENT',
+        'IN_WAITING_ROOM',
+        'UNDER_CONSULTATION',
+        'UNDER_TREATMENT',
+        'COMPLETED'
+      ) DEFAULT 'IN_WAITING_ROOM'
+    `);
+    await query(`
+      UPDATE queue
+      SET status = CASE status
+        WHEN 'WAITING' THEN 'IN_WAITING_ROOM'
+        WHEN 'PREPARATION' THEN 'UNDER_CONSULTATION'
+        WHEN 'IN_TREATMENT' THEN 'UNDER_TREATMENT'
+        ELSE status
+      END
+    `);
+    await query(`
+      ALTER TABLE queue
+      MODIFY COLUMN status ENUM(
+        'IN_WAITING_ROOM',
+        'UNDER_CONSULTATION',
+        'UNDER_TREATMENT',
+        'COMPLETED'
+      ) DEFAULT 'IN_WAITING_ROOM'
+    `);
   }
 };
 

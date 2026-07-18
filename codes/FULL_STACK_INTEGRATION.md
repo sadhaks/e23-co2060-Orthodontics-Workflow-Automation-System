@@ -1,51 +1,76 @@
-# OrthoFlow Full-Stack Integration Guide
+# OrthoFlow Full-Stack Integration Reference
 
-This document reflects the current repository state as of March 10, 2026.
+This document describes how the current frontend, backend, database, file storage, and email services work together.
 
-## 1. Current Stack
+For handover-level instructions, start with:
 
-- Backend: Node.js + Express + MySQL
-- Frontend: React + Vite
-- Authentication: email/password plus Google Sign-In using Google ID tokens
-- Session model: JWT access token + refresh token with inactivity timeout enforcement
-- File handling: Multer uploads, document download endpoints, dental-chart PDF export with Playwright fallback support
+- `../README.md`
+- `../docs/README.md`
+- `../docs/system-overview.md`
+- `../docs/cloud-deployment.md`
+- `../docs/operations-maintenance.md`
 
-## 2. Repository Layout
+## Current Stack
+
+- Frontend: React, TypeScript, Vite
+- Backend: Node.js, Express, MySQL
+- Database: MySQL, usually hosted on Aiven for cloud deployments
+- File storage: Cloudflare R2 through an S3-compatible API
+- Email: SMTP through SMTP2GO or Brevo
+- PDF rendering: Playwright/Chromium in the backend Docker image
+- Authentication: email/password, Google Sign-In, JWT access tokens, refresh tokens, inactivity timeout
+
+## Repository Layout
 
 ```text
-Orthodontics Workflow Automation System/
+codes/
 ├── Backend/
+│   ├── Dockerfile
 │   ├── server.js
-│   ├── .env
 │   ├── database-schema.sql
 │   ├── scripts/
-│   │   ├── migrate.js
-│   │   └── seed.js
 │   └── src/
+│       ├── config/
 │       ├── controllers/
 │       ├── middleware/
 │       ├── routes/
 │       └── services/
 ├── Frontend/
-│   ├── .env
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.ts
 │   └── src/app/
-└── start-orthoflow.sh
+├── FULL_STACK_INTEGRATION.md
+├── PRODUCTION_DEPLOYMENT_RUNBOOK.md
+└── QUICK_DEPLOY.md
 ```
 
-## 3. Backend Integration Surface
+There is no single repository-level startup script in the current handover path. Run backend and frontend commands from their own folders.
 
-`Backend/server.js` starts the API, validates the DB connection, ensures access-control schema updates exist, and starts two background jobs:
+## Backend Integration Surface
 
-- audit log retention cleanup
-- automatic appointment reminder processing
+The backend starts from `codes/Backend/server.js`.
 
-Current API roots:
+Startup responsibilities:
+
+- load environment variables
+- enable security, CORS, compression, logging, and JSON parsing middleware
+- trust the Render proxy for rate limiting and client IP handling
+- connect to MySQL
+- apply runtime schema guards
+- start audit retention cleanup
+- start automatic reminder processing
+- serve API routes and health checks
+
+Main API roots:
 
 - `/api/auth`
 - `/api/patients`
 - `/api/visits`
 - `/api/documents`
 - `/api/clinical-notes`
+- `/api/payment-records`
+- `/api/patient-materials`
 - `/api/queue`
 - `/api/cases`
 - `/api/inventory`
@@ -54,15 +79,22 @@ Current API roots:
 
 Operational endpoints:
 
+- `GET /`
 - `GET /health`
 - `GET /api`
-- static uploads at `/uploads`
 
-## 4. Frontend Integration Surface
+## Frontend Integration Surface
 
-The frontend router currently exposes these authenticated pages:
+The frontend application router is in:
 
-- `/` dashboard
+```text
+codes/Frontend/src/app/App.tsx
+```
+
+Main routes:
+
+- `/login`
+- `/`
 - `/patients`
 - `/patients/:id`
 - `/queue`
@@ -74,205 +106,180 @@ The frontend router currently exposes these authenticated pages:
 - `/admin/users`
 - `/admin/audit-logs`
 
-Role-gated navigation currently matches the shipped UI:
+The Student Cases route is available to admins, orthodontists, dental surgeons, and students. Orthodontists can assign patients to dental surgeons and students; dental surgeons can assign their patients to students and supervise those student cases. Admins can monitor progress and delete removed student cases for cleanup, while task progress and review actions remain supervisor/student workflows.
 
-- All signed-in users: dashboard, patients, settings
-- Admin, orthodontist, dental surgeon, student, nurse, reception: clinic queue
-- Admin, orthodontist, dental surgeon, student: student cases
-- Admin only: reports, user management, audit log
-- Admin and nurse: materials/inventory
-- Orthodontist and dental surgeon: request approvals
-
-Important current implementation detail:
-
-- The frontend API base URL is hardcoded to `http://localhost:3000` in `Frontend/src/app/config/api.ts`
-- The frontend uses `Frontend/.env` for `VITE_GOOGLE_CLIENT_ID`
-- For any non-localhost deployment, the frontend API base must be changed in code unless a reverse proxy preserves that backend origin
-
-## 5. Core Implemented Domains
-
-Current end-to-end domains in the codebase:
-
-- authentication and token refresh
-- user management with admin-created accounts and password reset email flow
-- patient directory with filters, inactive/reactivate flow, and assignment management
-- pending assignment approval workflow for orthodontists and dental surgeons
-- patient profile tabs for overview, visits, patient history, dental chart, documents, diagnosis, and treatment plan/notes
-- visit scheduling and reminder sending
-- clinic queue management
-- student case tracking
-- inventory/materials management with stock updates and restore flow
-- reports dashboard for admin
-- audit log browsing for admin
-
-## 6. Security and Access Model
-
-Current security behavior in the running system:
-
-- `helmet`, `cors`, `compression`, and request logging are enabled
-- JWT access and refresh tokens are used
-- inactivity timeout is enforced with `SESSION_TIMEOUT_SECONDS`
-- users flagged with `must_change_password` are forced to `/settings`
-- auth routes use stricter rate limiting
-- object-level access checks are enforced through `Backend/src/middleware/accessControl.js`
-
-Notable current access behavior:
-
-- inventory mutation routes are restricted to `NURSE`
-- admin can manage users and read reports/audit logs
-- receptionist workflows focus on patient-general and appointment operations
-- orthodontist and dental surgeon workflows are assignment-aware
-- diagnosis and treatment access differs by role and patient assignment
-
-## 7. Required Environment Configuration
-
-Backend environment comes from `Backend/.env`.
-
-Minimum backend values:
+The frontend API base URL is read from:
 
 ```env
-PORT=3000
-NODE_ENV=development
+VITE_API_BASE_URL
+```
 
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=your_password
-DB_NAME=orthoflow
+If the value is not set, local development falls back to:
 
-JWT_SECRET=change_this
-JWT_REFRESH_SECRET=change_this
-JWT_EXPIRE=24h
-JWT_REFRESH_EXPIRE=7d
-SESSION_TIMEOUT_SECONDS=3600
+```text
+http://localhost:3000
+```
 
-CORS_ORIGIN=http://localhost:5173
-GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
+Google Sign-In uses:
 
-EMAIL_SIMULATION=true
-SMTP_HOST=smtp.gmail.com
+```env
+VITE_GOOGLE_CLIENT_ID
+```
+
+The backend must use the same Google client ID in:
+
+```env
+GOOGLE_CLIENT_ID
+```
+
+## Database Integration
+
+The backend uses MySQL through `mysql2`.
+
+For cloud deployments, Aiven MySQL is currently the recommended managed database. SSL is supported through:
+
+```env
+DB_SSL=true
+DB_SSL_REJECT_UNAUTHORIZED=true
+DB_SSL_CA=-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----
+```
+
+The backend runs non-destructive schema guards on startup. These guards add selected newer tables and columns to an already initialized OrthoFlow database; they do not create the core schema in a fresh database.
+
+For a new database, configure the production database variables and the intended `SEED_ADMIN_*` values on a trusted administrative machine, then run these commands once from the repository root before the first backend deployment:
+
+```bash
+cd codes/Backend
+npm ci
+npm run bootstrap-db
+npm run ensure-admin
+```
+
+Confirm that the target database is new/empty before running `bootstrap-db`. Back up an existing database before any schema operation.
+
+MySQL stores structured system data:
+
+- users, roles, refresh tokens, password state
+- patients and care-team assignments
+- assignment requests and approval status
+- visits and queue entries
+- dental chart records and version metadata
+- document metadata and storage keys
+- diagnosis, treatment notes, payments, inventory, material usage
+- student cases, case progress, and case tasks
+- audit logs and system settings
+
+Uploaded file bytes should not be stored in MySQL for production. They should be stored in Cloudflare R2.
+
+## File Storage Integration
+
+The backend file storage abstraction supports local storage and S3-compatible storage.
+
+For production, use:
+
+```env
+FILE_STORAGE_PROVIDER=r2
+R2_BUCKET=orthoflow-documents
+R2_ENDPOINT=https://<cloudflare-account-id>.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+R2_REGION=auto
+R2_FORCE_PATH_STYLE=true
+UPLOAD_DIR=/tmp/uploads
+```
+
+The database stores the R2 object metadata. The bucket can remain private because users download files through authenticated backend endpoints.
+
+Local upload paths are only suitable for local development or temporary processing.
+
+## Email Integration
+
+The backend sends email through SMTP using Nodemailer. The code does not depend on a specific SMTP provider.
+
+SMTP2GO example:
+
+```env
+EMAIL_SIMULATION=false
+SMTP_HOST=mail.smtp2go.com
+SMTP_PORT=2525
+SMTP_SECURE=false
+SMTP_USER=<smtp2go-smtp-username>
+SMTP_PASS=<smtp2go-smtp-password>
+SMTP_FROM=no-reply@dental.pdn.ac.lk
+```
+
+Brevo example:
+
+```env
+EMAIL_SIMULATION=false
+SMTP_HOST=smtp-relay.brevo.com
 SMTP_PORT=587
 SMTP_SECURE=false
-SMTP_USER=your_email
-SMTP_PASS=your_app_password
-SMTP_FROM=your_email
-
-SEED_ADMIN_NAME=System Administrator
-SEED_ADMIN_EMAIL=admin@orthoflow.edu
-SEED_ADMIN_DEPARTMENT=Orthodontics
-SEED_ADMIN_PASSWORD=
+SMTP_USER=<brevo-login>
+SMTP_PASS=<brevo-smtp-key>
+SMTP_FROM=orthoflow97@gmail.com
 ```
 
-Other active backend settings supported today:
+The sender address must be verified in the provider account. For final production, a faculty-controlled sender such as `no-reply@dental.pdn.ac.lk` is preferable.
 
-- `AUDIT_LOG_RETENTION_*`
-- `UPLOAD_DIR`
-- `MAX_FILE_SIZE`
-- `ALLOWED_FILE_TYPES`
-- `RATE_LIMIT_WINDOW_MS`
-- `RATE_LIMIT_MAX_REQUESTS`
-- `LOG_LEVEL`
+## PDF Rendering Integration
 
-Seed admin behavior:
+Dental chart PDFs use backend-side rendering. The Render backend should be deployed as a Docker web service using:
 
-- `SEED_ADMIN_NAME` and `SEED_ADMIN_EMAIL` control the initial seeded admin identity
-- `SEED_ADMIN_DEPARTMENT` defaults to `Orthodontics`
-- if `SEED_ADMIN_PASSWORD` is blank, `npm run seed` generates a temporary password and forces password change on first login
-- if `SEED_ADMIN_PASSWORD` is provided, that password is used and `must_change_password` is not set by seed
-
-Frontend environment:
-
-```env
-VITE_GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
+```text
+codes/Backend/Dockerfile
 ```
 
-## 8. Local Full-Stack Startup
+The Docker image is based on the Microsoft Playwright image so Chromium is available in production. This is important for graphical dental chart PDFs with colors and layout.
 
-### Backend
+If the backend is deployed as a plain Node service without Chromium, PDF output may fall back to a simpler text-oriented format.
 
-From `Backend/`:
+## Local Development Commands
+
+Backend:
 
 ```bash
+cd codes/Backend
 npm install
-npm run migrate
-npm run seed
+npm run bootstrap-db
+npm run ensure-admin
 npm run dev
 ```
 
-Notes:
-
-- `npm run migrate` prepares the schema
-- `npm run seed` clears existing seeded tables and reloads baseline data
-- `npm run dev` currently runs `node server.js`
-
-### Frontend
-
-From `Frontend/`:
+Frontend:
 
 ```bash
+cd codes/Frontend
 npm install
 npm run dev
 ```
 
-### Two-terminal startup
+Default local URLs:
 
-```bash
-cd Backend && npm run dev
-cd Frontend && npm run dev
-```
+- backend: `http://localhost:3000`
+- frontend: `http://localhost:5173`
 
-### Helper script
+## Production Deployment Summary
 
-From repo root:
+Recommended cloud services:
 
-```bash
-./start-orthoflow.sh
-```
+- Render Static Site for frontend
+- Render Docker Web Service for backend
+- Aiven MySQL for database
+- Cloudflare R2 for uploaded patient documents and images
+- SMTP2GO or Brevo for email delivery
+- Google Cloud OAuth client for Google Sign-In
 
-Current helper-script behavior:
+Deployment order:
 
-- reuses existing listeners on ports `3000` and `5173`
-- waits for backend `/health`
-- waits for frontend root page
-- opens the frontend in the default browser
-- stops child processes on `Ctrl+C`
-
-## 9. Seeded Local Account
-
-`Backend/scripts/seed.js` currently creates one baseline admin user from `Backend/.env`:
-
-- email: `SEED_ADMIN_EMAIL` or `admin@orthoflow.edu`
-- name: `SEED_ADMIN_NAME` or `System Administrator`
-- department: `SEED_ADMIN_DEPARTMENT` or `Orthodontics`
-- password:
-  - `SEED_ADMIN_PASSWORD` if provided
-  - otherwise an auto-generated temporary password printed by the seed command
-
-If the password is auto-generated, the seeded admin must change it after the first login.
-
-## 10. Google Sign-In
-
-Google login is implemented but only works when both sides use a valid client ID.
-
-Required setup:
-
-1. Create a Google OAuth web client.
-2. Add `http://localhost:5173` to authorized JavaScript origins.
-3. Put the same client ID in:
-   - `Backend/.env` as `GOOGLE_CLIENT_ID`
-   - `Frontend/.env` as `VITE_GOOGLE_CLIENT_ID`
-
-Current backend behavior:
-
-- validates Google ID token audience against `GOOGLE_CLIENT_ID`
-- accepts comma-separated backend client IDs if needed
-
-## 11. Operational Validation
-
-Recommended manual validation after startup:
-
-1. Open `http://localhost:3000/health` and confirm the backend responds.
-2. Open `http://localhost:5173` and confirm the frontend loads.
-3. Sign in with an account appropriate for the workflow you want to validate.
-4. Verify patients, queue, materials, and admin-only pages behave according to role.
-5. Confirm save, delete, restore, and download actions show visible feedback in the UI.
+1. Create stakeholder-owned accounts.
+2. Fork the parent repository.
+3. Create Aiven MySQL.
+4. Initialize the new MySQL schema and first admin once.
+5. Create Cloudflare R2 bucket and token.
+6. Configure email provider.
+7. Create Render backend service.
+8. Create Render frontend service.
+9. Update CORS and frontend API URL.
+10. Update Google OAuth origins.
+11. Deploy backend, deploy frontend, test full workflows.

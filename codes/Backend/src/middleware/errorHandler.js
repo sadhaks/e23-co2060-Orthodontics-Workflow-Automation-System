@@ -121,6 +121,15 @@ const requestLogger = (req, res, next) => {
   const start = Date.now();
   
   res.on('finish', async () => {
+    const isQuietPollingRequest =
+      req.method === 'GET' &&
+      req.originalUrl === '/api/patients/assignment-requests/pending' &&
+      res.statusCode < 400;
+
+    if (isQuietPollingRequest) {
+      return;
+    }
+
     const duration = Date.now() - start;
     const logData = {
       method: req.method,

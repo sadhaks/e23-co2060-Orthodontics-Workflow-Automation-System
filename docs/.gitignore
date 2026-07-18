@@ -4,5 +4,5 @@ _site/
 .jekyll-metadata
 Gemfile.lock
 Gemfile
-
+.env
 # Add your own files to be ignored from git in here

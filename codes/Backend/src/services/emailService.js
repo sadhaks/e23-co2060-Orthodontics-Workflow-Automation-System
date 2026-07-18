@@ -1,11 +1,13 @@
 const nodemailer = require('nodemailer');
 
+const getEnv = (name) => String(process.env[name] || '').trim();
+
 const hasSmtpConfig = () =>
   Boolean(
-    process.env.SMTP_HOST &&
-      process.env.SMTP_PORT &&
-      process.env.SMTP_USER &&
-      process.env.SMTP_PASS
+    getEnv('SMTP_HOST') &&
+      getEnv('SMTP_PORT') &&
+      getEnv('SMTP_USER') &&
+      getEnv('SMTP_PASS')
   );
 
 const isSimulationEnabled = () => String(process.env.EMAIL_SIMULATION || 'true').toLowerCase() === 'true';
@@ -16,12 +18,12 @@ const buildTransport = () => {
   }
 
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT),
-    secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+    host: getEnv('SMTP_HOST'),
+    port: Number(getEnv('SMTP_PORT')),
+    secure: getEnv('SMTP_SECURE').toLowerCase() === 'true',
     auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS
+      user: getEnv('SMTP_USER'),
+      pass: getEnv('SMTP_PASS')
     }
   });
 };
@@ -81,7 +83,7 @@ const sendAppointmentReminderEmail = async ({
   }
 
   const mailResult = await transport.sendMail({
-    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    from: getEnv('SMTP_FROM') || getEnv('SMTP_USER'),
     to,
     subject,
     text,
@@ -129,7 +131,7 @@ const sendInitialPasswordEmail = async ({
   }
 
   const mailResult = await transport.sendMail({
-    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    from: getEnv('SMTP_FROM') || getEnv('SMTP_USER'),
     to,
     subject,
     text,

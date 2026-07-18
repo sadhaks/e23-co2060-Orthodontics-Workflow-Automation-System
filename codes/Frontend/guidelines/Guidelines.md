@@ -33,7 +33,7 @@ Apply this especially to:
 - use centralized API service calls
 - do not hardcode endpoint URLs in components
 - keep GET requests fresh for explicit refresh actions
-- remember the current frontend base API URL is configured centrally in `Frontend/src/app/config/api.ts`
+- remember the current frontend base API URL is configured centrally in `codes/Frontend/src/app/config/api.ts`
 
 ## 5. Dental Chart Rules
 

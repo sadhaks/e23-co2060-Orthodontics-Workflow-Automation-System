@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { AlertCircle, CheckCircle2, UserCheck, UserX } from 'lucide-react';
+import { AlertCircle, CheckCircle2, FolderOpen, UserCheck, UserX } from 'lucide-react';
 import { apiService } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { Button } from './UI';
@@ -24,6 +24,7 @@ export function AssignmentRequestPrompt() {
   const [loading, setLoading] = useState(false);
   const [requests, setRequests] = useState<PendingAssignmentRequest[]>([]);
   const [processingId, setProcessingId] = useState<number | null>(null);
+  const [confirmDecision, setConfirmDecision] = useState<'APPROVE' | 'REJECT' | null>(null);
 
   const canReviewRequests = ['ORTHODONTIST', 'DENTAL_SURGEON'].includes(user?.role || '');
 
@@ -50,7 +51,7 @@ export function AssignmentRequestPrompt() {
   const current = useMemo(() => requests[0] || null, [requests]);
 
   const respond = async (decision: 'APPROVE' | 'REJECT') => {
-    if (!current) return;
+    if (!current) return false;
     setProcessingId(current.id);
     try {
       await apiService.patients.respondToAssignmentRequest(String(current.id), decision);
@@ -60,10 +61,20 @@ export function AssignmentRequestPrompt() {
           : 'Assignment change rejected'
       );
       await loadPending();
+      return true;
     } catch (error: any) {
       toast.error(error?.message || 'Failed to submit response');
+      return false;
     } finally {
       setProcessingId(null);
+    }
+  };
+
+  const runConfirmedDecision = async () => {
+    if (!confirmDecision) return;
+    const success = await respond(confirmDecision);
+    if (success) {
+      setConfirmDecision(null);
     }
   };
 
@@ -95,12 +106,15 @@ export function AssignmentRequestPrompt() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => navigate(`/patients/${current.patient_id}`)}
-            >
-              Open Patient Record
-            </Button>
+            {!isAssignRequest && (
+              <Button
+                className="bg-blue-600 border-blue-600 text-white shadow-sm hover:bg-blue-700 active:bg-blue-800"
+                onClick={() => navigate(`/patients/${current.patient_id}`)}
+              >
+                <FolderOpen className="w-4 h-4 mr-1" />
+                Open Patient Record
+              </Button>
+            )}
             <span className="text-xs text-slate-500">
               {loading ? 'Refreshing requests...' : `${requests.length} pending`}
             </span>
@@ -108,20 +122,20 @@ export function AssignmentRequestPrompt() {
 
           <div className="flex justify-end gap-2 pt-2">
             <Button
-              className="bg-red-600 border-red-600 hover:bg-red-700 active:bg-red-800"
-              onClick={() => respond('REJECT')}
-              disabled={processingId === current.id}
-            >
-              <UserX className="w-4 h-4 mr-1" />
-              Reject
-            </Button>
-            <Button
               className="bg-green-600 border-green-600 hover:bg-green-700 active:bg-green-800"
-              onClick={() => respond('APPROVE')}
+              onClick={() => setConfirmDecision('APPROVE')}
               disabled={processingId === current.id}
             >
               <UserCheck className="w-4 h-4 mr-1" />
               {processingId === current.id ? 'Submitting...' : 'Approve'}
+            </Button>
+            <Button
+              className="bg-red-600 border-red-600 hover:bg-red-700 active:bg-red-800"
+              onClick={() => setConfirmDecision('REJECT')}
+              disabled={processingId === current.id}
+            >
+              <UserX className="w-4 h-4 mr-1" />
+              Reject
             </Button>
           </div>
           <p className="text-xs text-slate-500 flex items-center gap-1">
@@ -130,6 +144,60 @@ export function AssignmentRequestPrompt() {
           </p>
         </div>
       </div>
+
+      {confirmDecision && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/45 backdrop-blur-[1px] p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+            <div className={`px-5 py-4 border-b ${confirmDecision === 'APPROVE' ? 'border-green-100 bg-green-50' : 'border-red-100 bg-red-50'}`}>
+              <h3 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
+                {confirmDecision === 'APPROVE' ? (
+                  <UserCheck className="w-5 h-5 text-green-600" />
+                ) : (
+                  <UserX className="w-5 h-5 text-red-600" />
+                )}
+                {confirmDecision === 'APPROVE' ? 'Approve Request' : 'Reject Request'}
+              </h3>
+            </div>
+            <div className="px-5 py-4 space-y-4">
+              <div className={`rounded-lg border px-3 py-3 text-sm ${
+                confirmDecision === 'APPROVE'
+                  ? 'border-green-200 bg-green-50 text-green-800'
+                  : 'border-red-200 bg-red-50 text-red-800'
+              }`}>
+                Confirm that you want to {confirmDecision === 'APPROVE' ? 'approve' : 'reject'} this{' '}
+                {current.action_type === 'ASSIGN' ? 'assignment' : 'removal'} request for{' '}
+                <strong>{patientLabel}</strong>
+                {current.patient_code ? ` (${current.patient_code})` : ''}.
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => setConfirmDecision(null)}
+                  disabled={processingId !== null}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  className={
+                    confirmDecision === 'APPROVE'
+                      ? 'bg-green-600 border-green-600 hover:bg-green-700 active:bg-green-800'
+                      : 'bg-red-600 border-red-600 hover:bg-red-700 active:bg-red-800'
+                  }
+                  onClick={runConfirmedDecision}
+                  disabled={processingId !== null}
+                >
+                  {confirmDecision === 'APPROVE' ? (
+                    <UserCheck className="w-4 h-4 mr-1" />
+                  ) : (
+                    <UserX className="w-4 h-4 mr-1" />
+                  )}
+                  {processingId !== null ? 'Submitting...' : confirmDecision === 'APPROVE' ? 'Approve' : 'Reject'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

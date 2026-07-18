@@ -3,6 +3,68 @@ const tenDigitPhone = Joi.string().pattern(/^\d{10}$/).messages({
   'string.pattern.base': 'Phone number must be exactly 10 digits'
 });
 
+const parseDateOnly = (value) => {
+  const raw = String(value || '').trim();
+  let year;
+  let month;
+  let day;
+
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const slash = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+
+  if (iso) {
+    [, year, month, day] = iso;
+  } else if (slash) {
+    [, day, month, year] = slash;
+  } else {
+    return null;
+  }
+
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    date.getUTCFullYear() !== Number(year) ||
+    date.getUTCMonth() + 1 !== Number(month) ||
+    date.getUTCDate() !== Number(day)
+  ) {
+    return null;
+  }
+
+  return date;
+};
+
+const dateOnlySchema = Joi.string().custom((value, helpers) => {
+  const parsed = parseDateOnly(value);
+  if (!parsed) {
+    return helpers.error('date.format');
+  }
+
+  const today = new Date();
+  const todayOnly = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+  if (parsed > todayOnly) {
+    return helpers.error('date.max');
+  }
+
+  return value;
+}).messages({
+  'date.format': 'Date must be in DD/MM/YYYY or YYYY-MM-DD format',
+  'date.max': 'Date cannot be in the future'
+});
+
+const registrationDateSchema = Joi.string().custom((value, helpers) => {
+  const raw = String(value || '').trim();
+  const dateTimeLocal = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(raw);
+  const sqlDateTime = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?$/.test(raw);
+  const dateOnly = Boolean(parseDateOnly(raw));
+
+  if (!dateTimeLocal && !sqlDateTime && !dateOnly) {
+    return helpers.error('date.format');
+  }
+
+  return value;
+}).messages({
+  'date.format': 'Registration date must be DD/MM/YYYY, YYYY-MM-DD, or YYYY-MM-DD HH:mm'
+});
+
 // Validation middleware factory
 const validate = (schema, property = 'body') => {
   return (req, res, next) => {
@@ -112,9 +174,7 @@ const schemas = {
       'string.min': 'Last name must be at least 2 characters long',
       'any.required': 'Last name is required'
     }),
-    date_of_birth: Joi.date().max('now').optional().messages({
-      'date.max': 'Date of birth cannot be in the future'
-    }),
+    date_of_birth: dateOnlySchema.optional(),
     age: Joi.number().integer().min(0).max(130).optional(),
     gender: Joi.string().valid('MALE', 'FEMALE', 'OTHER').required().messages({
       'any.only': 'Gender must be MALE, FEMALE, or OTHER',
@@ -122,7 +182,7 @@ const schemas = {
     }),
     address: Joi.string().max(1000).optional(),
     province: Joi.string().max(100).optional(),
-    registration_date: Joi.date().max('now').optional(),
+    registration_date: registrationDateSchema.optional(),
     phone: tenDigitPhone.optional(),
     email: Joi.string().email().optional(),
     emergency_contact_name: Joi.string().max(255).optional(),
@@ -134,8 +194,8 @@ const schemas = {
   updatePatient: Joi.object({
     first_name: Joi.string().min(2).max(255).optional(),
     last_name: Joi.string().min(2).max(255).optional(),
-    registration_date: Joi.date().max('now').optional(),
-    date_of_birth: Joi.date().max('now').optional(),
+    registration_date: registrationDateSchema.optional(),
+    date_of_birth: dateOnlySchema.optional(),
     age: Joi.number().integer().min(0).max(130).optional(),
     gender: Joi.string().valid('MALE', 'FEMALE', 'OTHER').optional(),
     address: Joi.string().max(1000).optional(),
@@ -230,12 +290,21 @@ const schemas = {
       'number.positive': 'amount must be greater than zero',
       'any.required': 'amount is required'
     }),
-    currency: Joi.string().trim().uppercase().length(3).optional().default('LKR'),
+    currency: Joi.string().trim().uppercase().length(3).required().messages({
+      'string.empty': 'currency is required',
+      'string.length': 'currency must be a 3-letter code',
+      'any.required': 'currency is required'
+    }),
     payment_method: Joi.string().valid('CASH', 'CARD', 'BANK_TRANSFER', 'ONLINE', 'CHEQUE', 'OTHER').required().messages({
       'any.required': 'payment_method is required'
     }),
-    status: Joi.string().valid('PENDING', 'PAID', 'PARTIAL', 'REFUNDED', 'VOID').optional().default('PAID'),
-    reference_number: Joi.string().max(255).allow('').optional(),
+    status: Joi.string().valid('PENDING', 'PAID', 'PARTIAL', 'REFUNDED', 'VOID').required().messages({
+      'any.required': 'status is required'
+    }),
+    reference_number: Joi.string().trim().min(1).max(255).required().messages({
+      'string.empty': 'reference_number is required',
+      'any.required': 'reference_number is required'
+    }),
     notes: Joi.string().max(5000).allow('').optional()
   }),
 
@@ -277,13 +346,14 @@ const schemas = {
     }),
     provider_id: Joi.number().integer().positive().optional(),
     student_id: Joi.number().integer().positive().optional(),
+    status: Joi.string().valid('IN_WAITING_ROOM', 'UNDER_CONSULTATION', 'UNDER_TREATMENT', 'COMPLETED').optional(),
     priority: Joi.string().valid('LOW', 'NORMAL', 'HIGH', 'URGENT').optional(),
     procedure_type: Joi.string().max(255).optional(),
     notes: Joi.string().max(1000).optional()
   }),
 
   updateQueueStatus: Joi.object({
-    status: Joi.string().valid('WAITING', 'IN_TREATMENT', 'PREPARATION', 'COMPLETED').required().messages({
+    status: Joi.string().valid('IN_WAITING_ROOM', 'UNDER_CONSULTATION', 'UNDER_TREATMENT', 'COMPLETED').required().messages({
       'any.required': 'Status is required'
     }),
     notes: Joi.string().max(1000).optional()
@@ -301,15 +371,55 @@ const schemas = {
       'any.required': 'Supervisor ID is required'
     }),
     progress_notes: Joi.string().max(2000).optional(),
+    progress_percentage: Joi.number().integer().min(0).max(100).optional(),
     requirements_met: Joi.object().optional()
   }),
 
   updateCase: Joi.object({
     status: Joi.string().valid('ASSIGNED', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED').optional(),
     progress_notes: Joi.string().max(2000).optional(),
+    progress_percentage: Joi.number().integer().min(0).max(100).optional(),
     requirements_met: Joi.object().optional(),
-    supervisor_feedback: Joi.string().max(2000).optional()
+    supervisor_feedback: Joi.string().max(2000).optional(),
+    latest_evaluation: Joi.string().max(2000).optional(),
+    latest_recommendation: Joi.string().max(2000).optional()
   }).min(1),
+
+  createCaseProgress: Joi.object({
+    progress_notes: Joi.string().min(1).max(5000).required().messages({
+      'any.required': 'progress_notes is required'
+    }),
+    progress_percentage: Joi.number().integer().min(0).max(100).optional(),
+    requirements_met: Joi.object().optional(),
+    submit_for_review: Joi.boolean().optional()
+  }),
+
+  createCaseReview: Joi.object({
+    supervisor_feedback: Joi.string().max(5000).allow('').optional(),
+    evaluation: Joi.string().max(5000).allow('').optional(),
+    recommendations: Joi.string().max(5000).allow('').optional(),
+    status: Joi.string().valid('ASSIGNED', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED').optional()
+  }).or('supervisor_feedback', 'evaluation', 'recommendations', 'status'),
+
+  createCaseTask: Joi.object({
+    title: Joi.string().min(1).max(255).required().messages({
+      'any.required': 'title is required'
+    }),
+    description: Joi.string().max(5000).allow('').optional(),
+    deadline_at: Joi.date().optional().allow(null)
+  }),
+
+  updateCaseTask: Joi.object({
+    status: Joi.string().valid('ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'REVIEWED').required().messages({
+      'any.required': 'status is required'
+    }),
+    completion_notes: Joi.string().max(5000).allow('').optional()
+  }),
+
+  reviewCaseTask: Joi.object({
+    review_notes: Joi.string().max(5000).allow('').optional(),
+    status: Joi.string().valid('IN_PROGRESS', 'COMPLETED', 'REVIEWED').optional()
+  }).or('review_notes', 'status'),
 
   // Inventory schemas
   createInventoryItem: Joi.object({

@@ -24,6 +24,47 @@ const normalizeVisitDateForDb = (value) => {
   return null;
 };
 
+const ASSIGNMENT_SCOPED_ROLES = new Set(['ORTHODONTIST', 'DENTAL_SURGEON', 'STUDENT']);
+
+const buildVisitScope = (user, alias = 'v') => {
+  if (!ASSIGNMENT_SCOPED_ROLES.has(user.role)) {
+    return { clause: '', params: [] };
+  }
+
+  if (user.role === 'ORTHODONTIST' || user.role === 'DENTAL_SURGEON') {
+    return {
+      clause: `
+        AND (
+          ${alias}.provider_id = ?
+          OR EXISTS (
+            SELECT 1
+            FROM patient_assignments pa_scope
+            WHERE pa_scope.patient_id = ${alias}.patient_id
+              AND pa_scope.user_id = ?
+              AND pa_scope.assignment_role = ?
+              AND pa_scope.active = TRUE
+          )
+        )
+      `,
+      params: [user.id, user.id, user.role]
+    };
+  }
+
+  return {
+    clause: `
+      AND EXISTS (
+        SELECT 1
+        FROM patient_assignments pa_scope
+        WHERE pa_scope.patient_id = ${alias}.patient_id
+          AND pa_scope.user_id = ?
+          AND pa_scope.assignment_role = ?
+          AND pa_scope.active = TRUE
+      )
+    `,
+    params: [user.id, user.role]
+  };
+};
+
 // Get visits for a patient
 const getPatientVisits = async (req, res) => {
   try {
@@ -340,6 +381,7 @@ const deleteVisit = async (req, res) => {
 const getTodayVisits = async (req, res) => {
   try {
     const { status } = req.query;
+    const scope = buildVisitScope(req.user, 'v');
 
     let whereClause = 'WHERE DATE(v.visit_date) = CURDATE()';
     let queryParams = [];
@@ -348,6 +390,8 @@ const getTodayVisits = async (req, res) => {
       whereClause += ' AND v.status = ?';
       queryParams.push(status);
     }
+    whereClause += ` ${scope.clause}`;
+    queryParams.push(...scope.params);
 
     const visitsQuery = `
       SELECT 
@@ -378,10 +422,49 @@ const getTodayVisits = async (req, res) => {
   }
 };
 
+// Get upcoming scheduled appointments
+const getUpcomingVisits = async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 6, 1), 25);
+    const scope = buildVisitScope(req.user, 'v');
+
+    const visitsQuery = `
+      SELECT
+        v.*,
+        p.patient_code,
+        CONCAT(p.first_name, ' ', p.last_name) as patient_name,
+        u.name as provider_name,
+        u.role as provider_role
+      FROM visits v
+      LEFT JOIN patients p ON v.patient_id = p.id
+      LEFT JOIN users u ON v.provider_id = u.id
+      WHERE v.status = 'SCHEDULED'
+        AND v.visit_date >= NOW()
+        ${scope.clause}
+      ORDER BY v.visit_date ASC
+      LIMIT ?
+    `;
+
+    const visits = await query(visitsQuery, [...scope.params, limit]);
+
+    res.json({
+      success: true,
+      data: visits
+    });
+  } catch (error) {
+    console.error('Get upcoming visits error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
 // Get visit statistics
 const getVisitStats = async (req, res) => {
   try {
     const { period = 'month' } = req.query;
+    const scope = buildVisitScope(req.user, 'v');
 
     let dateFilter;
     switch (period) {
@@ -400,47 +483,52 @@ const getVisitStats = async (req, res) => {
 
     const statsQuery = `
       SELECT 
-        COUNT(*) as total_visits,
-        COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as completed_visits,
-        COUNT(CASE WHEN status = 'SCHEDULED' THEN 1 END) as scheduled_visits,
-        COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END) as cancelled_visits,
-        COUNT(CASE WHEN status = 'DID_NOT_ATTEND' THEN 1 END) as did_not_attend_visits,
-        COUNT(CASE WHEN visit_date >= NOW() THEN 1 END) as upcoming_visits
-      FROM visits 
-      WHERE visit_date >= ${dateFilter}
+        COUNT(CASE WHEN v.status IN ('COMPLETED', 'DID_NOT_ATTEND') THEN 1 END) as total_visits,
+        COUNT(CASE WHEN v.status = 'COMPLETED' THEN 1 END) as completed_visits,
+        COUNT(CASE WHEN v.status = 'SCHEDULED' THEN 1 END) as scheduled_visits,
+        COUNT(CASE WHEN v.status = 'CANCELLED' THEN 1 END) as cancelled_visits,
+        COUNT(CASE WHEN v.status = 'DID_NOT_ATTEND' THEN 1 END) as did_not_attend_visits,
+        COUNT(CASE WHEN v.status = 'SCHEDULED' AND v.visit_date >= NOW() THEN 1 END) as upcoming_visits
+      FROM visits v
+      WHERE v.visit_date >= ${dateFilter}
+        ${scope.clause}
     `;
 
-    const stats = await query(statsQuery);
+    const stats = await query(statsQuery, scope.params);
 
     // Daily visit counts for the period
     const dailyStatsQuery = `
       SELECT 
-        DATE(visit_date) as date,
-        COUNT(*) as visit_count,
-        COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as completed_count
-      FROM visits 
-      WHERE visit_date >= ${dateFilter}
-      GROUP BY DATE(visit_date)
+        DATE(v.visit_date) as date,
+        COUNT(CASE WHEN v.status IN ('COMPLETED', 'DID_NOT_ATTEND') THEN 1 END) as visit_count,
+        COUNT(CASE WHEN v.status = 'COMPLETED' THEN 1 END) as completed_count
+      FROM visits v
+      WHERE v.visit_date >= ${dateFilter}
+        ${scope.clause}
+        AND v.status IN ('COMPLETED', 'DID_NOT_ATTEND')
+      GROUP BY DATE(v.visit_date)
       ORDER BY date ASC
     `;
 
-    const dailyStats = await query(dailyStatsQuery);
+    const dailyStats = await query(dailyStatsQuery, scope.params);
 
     // Procedure type statistics
     const procedureStatsQuery = `
       SELECT 
-        procedure_type,
+        v.procedure_type,
         COUNT(*) as count
-      FROM visits 
-      WHERE visit_date >= ${dateFilter}
-        AND procedure_type IS NOT NULL
-        AND procedure_type != ''
-      GROUP BY procedure_type
+      FROM visits v
+      WHERE v.visit_date >= ${dateFilter}
+        ${scope.clause}
+        AND v.procedure_type IS NOT NULL
+        AND v.procedure_type != ''
+        AND v.status IN ('COMPLETED', 'DID_NOT_ATTEND')
+      GROUP BY v.procedure_type
       ORDER BY count DESC
       LIMIT 10
     `;
 
-    const procedureStats = await query(procedureStatsQuery);
+    const procedureStats = await query(procedureStatsQuery, scope.params);
 
     res.json({
       success: true,
@@ -510,6 +598,7 @@ module.exports = {
   updateVisit,
   deleteVisit,
   getTodayVisits,
+  getUpcomingVisits,
   getVisitStats,
   sendVisitReminder
 };

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Card, Badge, Button, Input } from './UI';
-import { AlertCircle, CheckCircle2, Download, Info, Loader2, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Download, Info, Loader2, RefreshCcw, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { apiService } from '../services/api';
 import { toast } from 'sonner';
 
@@ -56,6 +57,33 @@ const CONDITION_COLORS = {
   treated: { stroke: '#16a34a', fill: '#dcfce7' },
   missing: { stroke: '#94a3b8', fill: '#f1f5f9' },
   healthy: { stroke: '#cbd5e1', fill: '#ffffff' },
+};
+
+const SRI_LANKA_TIME_ZONE = 'Asia/Colombo';
+
+const formatSriLankaDateTime = (value?: string | null) => {
+  if (!value) return 'N/A';
+  const raw = String(value).trim();
+  if (!raw) return 'N/A';
+
+  const hasExplicitZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const dateTimeLike = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(raw);
+  const parsed = new Date(dateTimeLike && !hasExplicitZone ? `${raw.replace(' ', 'T')}Z` : raw);
+
+  if (Number.isNaN(parsed.getTime())) return raw;
+
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: SRI_LANKA_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(parsed);
+
+  const getPart = (type: string) => parts.find((part) => part.type === type)?.value || '';
+  return `${getPart('year')}-${getPart('month')}-${getPart('day')} ${getPart('hour')}:${getPart('minute')}`;
 };
 
 const getAdultToothType = (num: number): ToothType => {
@@ -281,6 +309,7 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
   const [versionActionId, setVersionActionId] = useState<number | null>(null);
   const [downloadingVersionId, setDownloadingVersionId] = useState<number | null>(null);
   const [versionsTrashCount, setVersionsTrashCount] = useState(0);
+  const [pendingToothCodes, setPendingToothCodes] = useState<Set<string>>(() => new Set());
   const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean;
     title: string;
@@ -310,6 +339,9 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
     top: 0
   });
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const popoverOpenedAtRef = useRef(0);
+  const [compactToothPopover, setCompactToothPopover] = useState(false);
+  const [visualViewportHeight, setVisualViewportHeight] = useState<number | null>(null);
   const dragStateRef = useRef<{ dragging: boolean; offsetX: number; offsetY: number; moved: boolean; startX: number; startY: number }>({
     dragging: false,
     offsetX: 0,
@@ -363,6 +395,7 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
   };
 
   const loadVersions = async (mode: 'active' | 'trashed' = versionsMode) => {
+    setVersions([]);
     setVersionsLoading(true);
     try {
       const canViewBin = role === 'ORTHODONTIST';
@@ -408,7 +441,13 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
 
   useEffect(() => {
     if (!toothPopover.open) return;
+    const hasPopoverInputFocus = () => {
+      const activeElement = document.activeElement;
+      return Boolean(activeElement && popoverRef.current?.contains(activeElement));
+    };
     const closePopover = () => {
+      if (Date.now() - popoverOpenedAtRef.current < 350) return;
+      if (compactToothPopover || hasPopoverInputFocus()) return;
       syncFormFromEntry(selectedToothCode);
       setToothPopover((prev) => ({ ...prev, open: false }));
     };
@@ -418,7 +457,27 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
       window.removeEventListener('scroll', closePopover, true);
       window.removeEventListener('resize', closePopover);
     };
-  }, [toothPopover.open, selectedToothCode, entries]);
+  }, [toothPopover.open, selectedToothCode, entries, compactToothPopover]);
+
+  useEffect(() => {
+    const updateCompactMode = () => {
+      const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+      const narrowViewport = window.matchMedia?.('(max-width: 767px)').matches ?? false;
+      const shortViewport = window.matchMedia?.('(max-height: 680px)').matches ?? false;
+      setCompactToothPopover(coarsePointer || narrowViewport || shortViewport);
+      setVisualViewportHeight(window.visualViewport?.height || window.innerHeight);
+    };
+
+    updateCompactMode();
+    window.addEventListener('resize', updateCompactMode);
+    window.visualViewport?.addEventListener('resize', updateCompactMode);
+    window.visualViewport?.addEventListener('scroll', updateCompactMode);
+    return () => {
+      window.removeEventListener('resize', updateCompactMode);
+      window.visualViewport?.removeEventListener('resize', updateCompactMode);
+      window.visualViewport?.removeEventListener('scroll', updateCompactMode);
+    };
+  }, []);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -472,6 +531,7 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
     let top = minGap;
     if (top > maxTop) top = maxTop;
 
+    popoverOpenedAtRef.current = Date.now();
     setToothPopover({ open: true, left, top });
   };
 
@@ -480,8 +540,20 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
     setToothPopover((prev) => ({ ...prev, open: false }));
   };
 
+  const setToothPending = (toothCode: string, pending: boolean) => {
+    setPendingToothCodes((prev) => {
+      const next = new Set(prev);
+      if (pending) {
+        next.add(toothCode);
+      } else {
+        next.delete(toothCode);
+      }
+      return next;
+    });
+  };
+
   const startPopoverDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest('button, input, label')) return;
+    if (compactToothPopover || (event.target as HTMLElement).closest('button, input, textarea, label, select')) return;
     dragStateRef.current.dragging = true;
     dragStateRef.current.moved = false;
     dragStateRef.current.offsetX = event.clientX - toothPopover.left;
@@ -494,18 +566,39 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
 
   const toggleToothSelection = async (tooth: ToothDescriptor) => {
     if (!canEdit) return;
+    if (pendingToothCodes.has(tooth.key)) return;
 
-    const exists = Boolean(entries[tooth.key]);
+    const previousEntry = entries[tooth.key];
+    const exists = Boolean(previousEntry);
+    setToothPending(tooth.key, true);
+
     try {
       if (exists) {
-        await apiService.patients.deleteCustomDentalChartTooth(patientId, tooth.key);
-        setEntries((prev) => {
-          const next = { ...prev };
-          delete next[tooth.key];
-          return next;
+        flushSync(() => {
+          setEntries((prev) => {
+            const next = { ...prev };
+            delete next[tooth.key];
+            return next;
+          });
+          if (selectedToothCode === tooth.key) setSelectedToothCode(null);
         });
-        if (selectedToothCode === tooth.key) setSelectedToothCode(null);
+        await apiService.patients.deleteCustomDentalChartTooth(patientId, tooth.key);
       } else {
+        const optimisticEntry: DentalEntry = {
+          tooth_code: tooth.key,
+          dentition: tooth.dentition,
+          notation_x: tooth.notationX,
+          notation_y: tooth.notationY,
+          status: 'HEALTHY',
+          is_pathology: false,
+          is_planned: false,
+          is_treated: false,
+          is_missing: false,
+          pathology: null,
+          treatment: null,
+          event_date: null
+        };
+        setEntries((prev) => ({ ...prev, [tooth.key]: optimisticEntry }));
         const response = await apiService.patients.upsertCustomDentalChartTooth(patientId, tooth.key, {
           dentition: tooth.dentition,
           notation_x: tooth.notationX,
@@ -520,7 +613,18 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
         setEntries((prev) => ({ ...prev, [saved.tooth_code]: saved }));
       }
     } catch (error: any) {
+      setEntries((prev) => {
+        const next = { ...prev };
+        if (previousEntry) {
+          next[tooth.key] = previousEntry;
+        } else {
+          delete next[tooth.key];
+        }
+        return next;
+      });
       toast.error(error?.message || 'Failed to update tooth selection');
+    } finally {
+      setToothPending(tooth.key, false);
     }
   };
 
@@ -719,13 +823,15 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
 
   const SelectorTooth = ({ tooth }: { tooth: ToothDescriptor }) => {
     const exists = Boolean(entries[tooth.key]);
+    const pending = pendingToothCodes.has(tooth.key);
     return (
       <button
         onClick={() => toggleToothSelection(tooth)}
-        disabled={!canEdit}
-        className={`relative flex flex-col items-center p-1 rounded-lg transition-all ${
+        disabled={!canEdit || pending}
+        data-testid={`dental-selector-tooth-${tooth.key}`}
+        className={`relative flex min-h-24 min-w-16 touch-manipulation flex-col items-center p-1 rounded-lg transition-all ${
           exists ? 'bg-amber-50 ring-2 ring-amber-300 scale-[1.03]' : 'hover:bg-gray-50'
-        } ${!canEdit ? 'cursor-not-allowed opacity-80' : ''}`}
+        } ${pending ? 'opacity-75' : ''} ${!canEdit ? 'cursor-not-allowed opacity-80' : ''}`}
       >
         <NotationLabel x={tooth.notationX} y={tooth.notationY} active={exists} />
         <ToothSVG id={`selector-${tooth.key}`} showConditions={false} />
@@ -745,7 +851,8 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
           syncFormFromEntry(tooth.key);
           openToothPopover(event);
         }}
-        className={`relative flex flex-col items-center p-1 rounded-lg transition-all ${active ? 'bg-blue-50 scale-[1.03]' : 'hover:bg-gray-50'}`}
+        data-testid={`dental-custom-tooth-${tooth.key}`}
+        className={`relative flex min-h-24 min-w-16 touch-manipulation flex-col items-center p-1 rounded-lg transition-all ${active ? 'bg-blue-50 scale-[1.03]' : 'hover:bg-gray-50'}`}
       >
         <NotationLabel x={tooth.notationX} y={tooth.notationY} active={active} />
         <ToothSVG id={`custom-${tooth.key}`} entry={entry} showConditions />
@@ -756,12 +863,11 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
   return (
     <div className="relative">
       <Card className="p-6 md:p-8">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+        <div className="dental-chart-header flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
           <div>
             <h4 className="text-2xl font-bold text-slate-900">Clinical Dental Chart</h4>
-            <p className="text-sm text-slate-500">Select existing teeth first, then manage conditions in the custom chart.</p>
           </div>
-          <div className="flex flex-wrap gap-4 text-sm font-semibold text-slate-600">
+          <div className="dental-chart-legend flex flex-wrap gap-4 text-sm font-semibold text-slate-600">
             <div className="flex items-center gap-2"><span className="w-4 h-4 rounded-full border-2 border-amber-400 bg-amber-100" />Selected in main chart</div>
             <div className="flex items-center gap-2"><span className="w-4 h-4 rounded-full border-2 border-red-500 bg-red-100" />Pathology</div>
             <div className="flex items-center gap-2"><span className="w-4 h-4 rounded-full border-2 border-blue-500 bg-blue-100" />Planned</div>
@@ -770,17 +876,17 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-slate-50/60 p-6 md:p-8">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3 sm:p-5 md:rounded-3xl md:p-8">
           {loading && <p className="text-xs text-gray-500 mb-3">Loading dental chart...</p>}
 
-          <div className="space-y-12 overflow-x-auto pb-2 pl-1 pr-10">
+          <div className="space-y-10 overflow-x-auto overscroll-x-contain pb-3 pl-1 pr-4 touch-auto md:space-y-12 md:pr-10">
             <div>
               <h5 className="text-sm font-bold text-slate-700 mb-4">Main Chart (Selection Only) - Milk Teeth</h5>
               <div className="space-y-10">
-                <div className="flex justify-center gap-1 md:gap-2 min-w-max px-6">
+                <div className="flex justify-center gap-1 md:gap-2 min-w-max px-3 md:px-6">
                   {milkUpper.map((tooth) => <SelectorTooth key={tooth.key} tooth={tooth} />)}
                 </div>
-                <div className="flex justify-center gap-1 md:gap-2 min-w-max px-6">
+                <div className="flex justify-center gap-1 md:gap-2 min-w-max px-3 md:px-6">
                   {milkLower.map((tooth) => <SelectorTooth key={tooth.key} tooth={tooth} />)}
                 </div>
               </div>
@@ -789,10 +895,10 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
             <div>
               <h5 className="text-sm font-bold text-slate-700 mb-4">Main Chart (Selection Only) - Adult Teeth</h5>
               <div className="space-y-10">
-                <div className="flex justify-center gap-0.5 md:gap-1 min-w-max px-6">
+                <div className="flex justify-center gap-0.5 md:gap-1 min-w-max px-3 md:px-6">
                   {adultUpper.map((tooth) => <SelectorTooth key={tooth.key} tooth={tooth} />)}
                 </div>
-                <div className="flex justify-center gap-0.5 md:gap-1 min-w-max px-6">
+                <div className="flex justify-center gap-0.5 md:gap-1 min-w-max px-3 md:px-6">
                   {adultLower.map((tooth) => <SelectorTooth key={tooth.key} tooth={tooth} />)}
                 </div>
               </div>
@@ -808,12 +914,12 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
             <div>
               <h5 className="text-sm font-bold text-slate-700 mb-4">Customized Milk Teeth</h5>
               <div className="space-y-10">
-                <div className="flex justify-center gap-1 md:gap-2 min-w-max px-6">
+                <div className="flex justify-center gap-1 md:gap-2 min-w-max px-3 md:px-6">
                   {customMilkUpper.length > 0 ? customMilkUpper.map((tooth) => <CustomTooth key={`custom-${tooth.key}`} tooth={tooth} />) : (
                     <p className="text-xs text-slate-400">No upper milk teeth selected.</p>
                   )}
                 </div>
-                <div className="flex justify-center gap-1 md:gap-2 min-w-max px-6">
+                <div className="flex justify-center gap-1 md:gap-2 min-w-max px-3 md:px-6">
                   {customMilkLower.length > 0 ? customMilkLower.map((tooth) => <CustomTooth key={`custom-${tooth.key}`} tooth={tooth} />) : (
                     <p className="text-xs text-slate-400">No lower milk teeth selected.</p>
                   )}
@@ -824,12 +930,12 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
             <div>
               <h5 className="text-sm font-bold text-slate-700 mb-4">Customized Adult Teeth</h5>
               <div className="space-y-10">
-                <div className="flex justify-center gap-0.5 md:gap-1 min-w-max px-6">
+                <div className="flex justify-center gap-0.5 md:gap-1 min-w-max px-3 md:px-6">
                   {customAdultUpper.length > 0 ? customAdultUpper.map((tooth) => <CustomTooth key={`custom-${tooth.key}`} tooth={tooth} />) : (
                     <p className="text-xs text-slate-400">No upper adult teeth selected.</p>
                   )}
                 </div>
-                <div className="flex justify-center gap-0.5 md:gap-1 min-w-max px-6">
+                <div className="flex justify-center gap-0.5 md:gap-1 min-w-max px-3 md:px-6">
                   {customAdultLower.length > 0 ? customAdultLower.map((tooth) => <CustomTooth key={`custom-${tooth.key}`} tooth={tooth} />) : (
                     <p className="text-xs text-slate-400">No lower adult teeth selected.</p>
                   )}
@@ -865,34 +971,39 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
         <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
             <div>
-              <h5 className="text-sm font-bold text-slate-800">Annotated Chart Versions (Files)</h5>
-              <p className="text-xs text-slate-500">Saved chronologically. Each version records who annotated it.</p>
+              <h5 className="text-sm font-bold text-slate-800">Annotated Chart Versions</h5>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-nowrap items-center gap-2 overflow-x-auto pb-1">
               {canManageVersionBin && (
-                <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
-                  <button
-                    type="button"
-                    className={`px-3 h-9 text-xs ${versionsMode === 'active' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'}`}
-                    onClick={() => {
-                      setVersionsMode('active');
-                      loadVersions('active');
-                    }}
-                  >
-                    Active
-                  </button>
-                  <button
-                    type="button"
-                    className={`px-3 h-9 text-xs border-l border-gray-200 ${versionsMode === 'trashed' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'}`}
-                    onClick={() => {
-                      setVersionsMode('trashed');
-                      loadVersions('trashed');
-                    }}
-                  >
-                    Bin{versionsTrashCount > 0 ? ` (${versionsTrashCount})` : ''}
-                  </button>
-                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    const nextMode = versionsMode === 'active' ? 'trashed' : 'active';
+                    setVersionsMode(nextMode);
+                    loadVersions(nextMode);
+                  }}
+                  disabled={versionsLoading}
+                  className="border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  {versionsMode === 'active' ? 'View Trash' : 'View Active'}
+                  {versionsMode === 'active' && versionsTrashCount > 0 && (
+                    <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                      {versionsTrashCount}
+                    </span>
+                  )}
+                </Button>
               )}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => loadVersions(versionsMode)}
+                disabled={versionsLoading}
+              >
+                <RefreshCcw className={`w-4 h-4 mr-1 ${versionsLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
               {canEdit && versionsMode === 'active' && (
                 <Button size="sm" onClick={requestSaveAnnotatedVersion} disabled={savingVersion}>
                   <Save className="w-4 h-4 mr-1" />
@@ -916,7 +1027,7 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
                 <div>
                   <p className="text-sm font-semibold text-slate-900">{version.version_label}</p>
                   <p className="text-xs text-slate-500">
-                    {String(version.created_at).slice(0, 16).replace('T', ' ')} • {version.entry_count} annotated teeth • by {version.annotated_by_name || 'Unknown'}
+                    {formatSriLankaDateTime(version.created_at)} • {version.entry_count} annotated teeth • by {version.annotated_by_name || 'Unknown'}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -924,6 +1035,7 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
                     <Button
                       size="sm"
                       variant="secondary"
+                      className="border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
                       onClick={() => downloadVersion(version.id)}
                       disabled={downloadingVersionId === version.id}
                     >
@@ -1048,22 +1160,33 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
       {toothPopover.open && selectedToothCode && selected && (
         <div className="fixed inset-0 z-50">
           <div
-            className="absolute inset-0 bg-transparent"
+            className={`absolute inset-0 ${compactToothPopover ? 'bg-slate-900/35 backdrop-blur-[1px]' : 'bg-transparent'}`}
             onClick={() => {
+              if (Date.now() - popoverOpenedAtRef.current < 250) return;
               if (dragStateRef.current.moved) return;
               closeToothPopover();
             }}
           />
           <div
             ref={popoverRef}
-            className="absolute w-[350px] max-w-[calc(100vw-24px)]"
-            style={{ left: toothPopover.left, top: toothPopover.top }}
+            data-testid="dental-tooth-popover"
+            className={
+              compactToothPopover
+                ? 'absolute inset-x-0 bottom-0 mx-auto w-full max-w-xl px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4'
+                : 'absolute w-[350px] max-w-[calc(100vw-24px)]'
+            }
+            style={
+              compactToothPopover
+                ? undefined
+                : { left: toothPopover.left, top: toothPopover.top }
+            }
           >
           <Card
-            className="p-5 shadow-2xl border border-blue-100 bg-white"
+            className="max-h-[min(86vh,620px)] overflow-y-auto overscroll-contain border border-blue-100 bg-white p-4 shadow-2xl sm:p-5"
+            style={compactToothPopover && visualViewportHeight ? { maxHeight: Math.max(360, visualViewportHeight - 24) } : undefined}
           >
             <div
-              className="flex items-center justify-between mb-3 cursor-grab active:cursor-grabbing select-none"
+              className={`mb-3 flex items-center justify-between select-none ${compactToothPopover ? '' : 'cursor-grab active:cursor-grabbing'}`}
               onPointerDown={startPopoverDrag}
             >
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Tooth Annotation</p>
@@ -1139,11 +1262,11 @@ export function DentalChart({ patientId, canEdit, role }: Props) {
 
               <div>
                 <label className="text-xs font-semibold text-gray-500">Pathology</label>
-                <Input value={form.pathology} onChange={(e) => setForm((s) => ({ ...s, pathology: e.target.value }))} disabled={!canEdit} />
+                <Input data-testid="dental-pathology-input" value={form.pathology} onChange={(e) => setForm((s) => ({ ...s, pathology: e.target.value }))} disabled={!canEdit} />
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-500">Treatment</label>
-                <Input value={form.treatment} onChange={(e) => setForm((s) => ({ ...s, treatment: e.target.value }))} disabled={!canEdit} />
+                <Input data-testid="dental-treatment-input" value={form.treatment} onChange={(e) => setForm((s) => ({ ...s, treatment: e.target.value }))} disabled={!canEdit} />
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-500">Annotated Date</label>

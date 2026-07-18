@@ -17,6 +17,7 @@ type PatientRecord = {
   phone?: string | null;
   email?: string | null;
   address?: string | null;
+  created_at?: string | null;
   status: 'ACTIVE' | 'COMPLETED' | 'CONSULTATION' | 'MAINTENANCE' | 'INACTIVE';
   display_status?: 'ACTIVE' | 'COMPLETED' | 'CONSULTATION' | 'MAINTENANCE' | 'INACTIVE';
   is_inactive?: boolean;
@@ -122,14 +123,14 @@ function MultiSelectDropdown({
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const onClickOutside = (event: MouseEvent) => {
+    const onClickOutside = (event: PointerEvent) => {
       if (!rootRef.current) return;
       if (!rootRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     };
-    document.addEventListener('mousedown', onClickOutside);
-    return () => document.removeEventListener('mousedown', onClickOutside);
+    document.addEventListener('pointerdown', onClickOutside);
+    return () => document.removeEventListener('pointerdown', onClickOutside);
   }, []);
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -158,12 +159,12 @@ function MultiSelectDropdown({
 
   return (
     <div ref={rootRef} className="relative">
-      <label className="block text-sm text-gray-600 mb-1">{label}</label>
+      <label className="mb-1 block text-sm font-medium text-gray-600">{label}</label>
       <button
         type="button"
         data-testid={`${testIdPrefix}-trigger`}
         aria-expanded={open}
-        className="h-11 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between"
+        className="flex min-h-11 w-full touch-manipulation items-center justify-between rounded-md border border-gray-200 bg-white px-3 py-2 text-left text-base focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm"
         onClick={() => setOpen((value) => !value)}
       >
         <span className="truncate">
@@ -184,7 +185,7 @@ function MultiSelectDropdown({
               placeholder="Search..."
             />
           </div>
-          <div className="max-h-56 overflow-y-auto p-1">
+          <div className="max-h-64 overflow-y-auto overscroll-contain p-1">
             {filteredOptions.length === 0 && (
               <p className="px-2 py-2 text-xs text-gray-500">No matching options.</p>
             )}
@@ -196,7 +197,7 @@ function MultiSelectDropdown({
                   key={id}
                   type="button"
                   data-testid={`${testIdPrefix}-option-${id}`}
-                  className={`w-full rounded px-2 py-2 text-left text-sm flex items-start gap-2 ${checked ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}
+                  className={`flex min-h-11 w-full touch-manipulation items-start gap-2 rounded px-2 py-2 text-left text-base sm:text-sm ${checked ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}
                   onClick={() => toggleOption(id)}
                 >
                   <input type="checkbox" readOnly checked={checked} className="mt-1" />
@@ -224,6 +225,7 @@ export function PatientListPage() {
   const [assignOpen, setAssignOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingPatientId, setDeletingPatientId] = useState<number | null>(null);
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null);
   const [adminDeletedFilter, setAdminDeletedFilter] = useState<'active' | 'inactive'>('active');
   const [showFilters, setShowFilters] = useState(false);
@@ -264,6 +266,7 @@ export function PatientListPage() {
   const createBirthDateRef = useRef<HTMLInputElement | null>(null);
   const editRegistrationDateRef = useRef<HTMLInputElement | null>(null);
   const editBirthDateRef = useRef<HTMLInputElement | null>(null);
+  const editDetailsRequestRef = useRef(0);
 
   const openDateTimePicker = (input: HTMLInputElement | null) => {
     if (!input) return;
@@ -288,10 +291,11 @@ export function PatientListPage() {
   const canManagePatientDirectory = user?.role === 'RECEPTION';
   const canDeletePatients = user?.role === 'ADMIN';
   const canOrthoAssignCareTeam = user?.role === 'ORTHODONTIST';
-  const canAssignCareTeam = ['RECEPTION', 'ORTHODONTIST'].includes(user?.role || '');
+  const canSurgeonAssignStudents = user?.role === 'DENTAL_SURGEON';
+  const canAssignCareTeam = ['RECEPTION', 'ORTHODONTIST', 'DENTAL_SURGEON'].includes(user?.role || '');
   const canFilterByAssignedOrthodontist = ['ADMIN', 'RECEPTION', 'DENTAL_SURGEON', 'STUDENT', 'NURSE'].includes(user?.role || '');
   const canExportAssignedPatientRecord = ['ORTHODONTIST', 'DENTAL_SURGEON', 'STUDENT'].includes(user?.role || '');
-  const canShowAssignAction = canManagePatientDirectory ? canAssignCareTeam : canOrthoAssignCareTeam;
+  const canShowAssignAction = canAssignCareTeam;
 
   const loadPatients = async (
     search = '',
@@ -321,8 +325,8 @@ export function PatientListPage() {
     } catch (err: any) {
       if (showLoader) {
         setError(err?.message || 'Failed to load patients');
+        setPatients([]);
       }
-      setPatients([]);
     } finally {
       if (showLoader) {
         setLoading(false);
@@ -344,7 +348,9 @@ export function PatientListPage() {
   const loadAssignableStaff = async () => {
     if (!canAssignCareTeam) return;
     try {
-      const response = await apiService.patients.getAssignableStaff(['DENTAL_SURGEON', 'STUDENT']);
+      const response = await apiService.patients.getAssignableStaff(
+        canSurgeonAssignStudents ? ['STUDENT'] : ['DENTAL_SURGEON', 'STUDENT']
+      );
       const rows = response.data || [];
       setAssignableStaff(rows);
     } catch {
@@ -502,32 +508,46 @@ export function PatientListPage() {
     setCreateOpen(true);
   };
 
-  const openEditModal = async (patientId: number) => {
-    setSaving(true);
+  const buildEditFormFromPatient = (patient: Partial<PatientRecord>) => ({
+    first_name: patient.first_name || '',
+    last_name: patient.last_name || '',
+    registration_date: toDateTimeLocalValue(patient.created_at),
+    date_of_birth: patient.date_of_birth ? String(patient.date_of_birth).slice(0, 10) : '',
+    age: patient.age ? String(patient.age) : '',
+    gender: patient.gender || 'FEMALE',
+    phone: patient.phone || '',
+    email: patient.email || '',
+    address: patient.address || '',
+    province: patient.province || ''
+  });
+
+  const closeEditModal = () => {
+    editDetailsRequestRef.current += 1;
+    setEditOpen(false);
+  };
+
+  const openEditModal = (patient: PatientRecord) => {
+    const requestId = editDetailsRequestRef.current + 1;
+    editDetailsRequestRef.current = requestId;
+    setSelectedPatientId(patient.id);
+    setEditForm(buildEditFormFromPatient(patient));
+    setEditOpen(true);
     setError(null);
-    try {
-      const response = await apiService.patients.getById(String(patientId));
-      const patient = response.data?.patient;
-      if (!patient) throw new Error('Patient details not found');
-      setSelectedPatientId(patientId);
-      setEditForm({
-        first_name: patient.first_name || '',
-        last_name: patient.last_name || '',
-        registration_date: toDateTimeLocalValue(patient.created_at),
-        date_of_birth: patient.date_of_birth ? String(patient.date_of_birth).slice(0, 10) : '',
-        age: patient.age ? String(patient.age) : '',
-        gender: patient.gender || 'FEMALE',
-        phone: patient.phone || '',
-        email: patient.email || '',
-        address: patient.address || '',
-        province: patient.province || ''
-      });
-      setEditOpen(true);
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load patient details');
-    } finally {
-      setSaving(false);
-    }
+
+    void (async () => {
+      try {
+        const response = await apiService.patients.getById(String(patient.id));
+        const detailedPatient = response.data?.patient;
+        if (!detailedPatient) throw new Error('Patient details not found');
+        if (editDetailsRequestRef.current === requestId) {
+          setEditForm(buildEditFormFromPatient(detailedPatient));
+        }
+      } catch (err: any) {
+        if (editDetailsRequestRef.current === requestId) {
+          setError(err?.message || 'Failed to load patient details');
+        }
+      }
+    })();
   };
 
   const handleEdit = async (e: React.FormEvent) => {
@@ -552,7 +572,7 @@ export function PatientListPage() {
         address: editForm.address || undefined,
         province: editForm.province || undefined
       });
-      setEditOpen(false);
+      closeEditModal();
       setSelectedPatientId(null);
       await loadPatients(searchTerm);
       await loadPatientCounts();
@@ -587,6 +607,8 @@ export function PatientListPage() {
       if (canOrthoAssignCareTeam) {
         setAssignSurgeonIds(surgeonIds);
         setAssignStudentIds(studentIds);
+      } else if (canSurgeonAssignStudents) {
+        setAssignStudentIds(studentIds);
       } else {
         setAssignOrthodontistIds(orthodontistIds);
         setAssignSurgeonIds(surgeonIds);
@@ -605,6 +627,10 @@ export function PatientListPage() {
           ...assignSurgeonIds.map((id) => ({ user_id: Number(id), assignment_role: 'DENTAL_SURGEON' as const })),
           ...assignStudentIds.map((id) => ({ user_id: Number(id), assignment_role: 'STUDENT' as const }))
         ]
+      : canSurgeonAssignStudents
+        ? [
+            ...assignStudentIds.map((id) => ({ user_id: Number(id), assignment_role: 'STUDENT' as const }))
+          ]
       : [
           ...assignOrthodontistIds.map((id) => ({ user_id: Number(id), assignment_role: 'ORTHODONTIST' as const })),
           ...assignSurgeonIds.map((id) => ({ user_id: Number(id), assignment_role: 'DENTAL_SURGEON' as const }))
@@ -698,17 +724,37 @@ export function PatientListPage() {
         ? 'I understand this permanent deletion cannot be undone.'
         : 'I understand this will deactivate the patient record.',
       onConfirm: async () => {
+        const previousPatients = patients;
+        const previousCounts = patientCounts;
         setSaving(true);
+        setDeletingPatientId(patientId);
         setError(null);
+        setPatients((currentPatients) => currentPatients.filter((patient) => patient.id !== patientId));
+        setPatientCounts((currentCounts) => {
+          if (permanent) {
+            return {
+              ...currentCounts,
+              inactive: Math.max(0, currentCounts.inactive - 1)
+            };
+          }
+
+          return {
+            active: Math.max(0, currentCounts.active - 1),
+            inactive: currentCounts.inactive + 1
+          };
+        });
         try {
           await apiService.patients.delete(String(patientId), permanent);
           localStorage.setItem('patients_updated_at', String(Date.now()));
-          await loadPatients(searchTerm, adminDeletedFilter);
-          await loadPatientCounts();
+          void loadPatients(searchTerm, adminDeletedFilter, false);
+          void loadPatientCounts();
         } catch (err: any) {
+          setPatients(previousPatients);
+          setPatientCounts(previousCounts);
           setError(err?.message || (permanent ? 'Failed to permanently delete patient' : 'Failed to delete patient'));
         } finally {
           setSaving(false);
+          setDeletingPatientId(null);
         }
       }
     });
@@ -780,7 +826,6 @@ export function PatientListPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Patient Directory</h2>
-          <p className="text-gray-500">Manage hospital patient records and cases.</p>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
             <Badge variant="success">Active Patients: {patientCounts.active}</Badge>
             <Badge variant="neutral">
@@ -991,7 +1036,7 @@ export function PatientListPage() {
                             className="h-10 min-w-[136px] rounded-xl border border-amber-200 bg-gradient-to-r from-amber-400 to-orange-400 px-4 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(245,158,11,0.24)] transition-all duration-200 hover:-translate-y-0.5 hover:from-amber-500 hover:to-orange-500 hover:shadow-[0_14px_30px_rgba(245,158,11,0.3)] active:translate-y-0 focus:ring-amber-300"
                             onClick={(e) => {
                               e.stopPropagation();
-                              openEditModal(p.id);
+                              openEditModal(p);
                             }}
                           >
                             <Pencil className="mr-2 h-4 w-4" />
@@ -1025,10 +1070,14 @@ export function PatientListPage() {
                           e.stopPropagation();
                           handleDeletePatient(p.id, `${p.first_name} ${p.last_name}`, adminDeletedFilter === 'inactive');
                         }}
-                        disabled={saving}
+                        disabled={deletingPatientId === p.id}
                       >
                         <Trash2 className="w-3 h-3 mr-1" />
-                        {adminDeletedFilter === 'inactive' ? 'Delete Permanently' : 'Delete'}
+                        {deletingPatientId === p.id
+                          ? 'Deleting...'
+                          : adminDeletedFilter === 'inactive'
+                            ? 'Delete Permanently'
+                            : 'Delete'}
                       </Button>
                     </div>
                   )}
@@ -1088,13 +1137,13 @@ export function PatientListPage() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-gray-600">Registration Date &amp; Time</label>
-                  <div className="flex items-center gap-3 rounded-md border border-gray-200 bg-white px-3 py-2">
-                    <input
+                  <div className="flex items-center gap-2">
+                    <Input
                       ref={createRegistrationDateRef}
                       type="datetime-local"
                       value={createForm.registration_date}
                       onChange={(e) => setCreateForm((s) => ({ ...s, registration_date: e.target.value }))}
-                      className="sr-only"
+                      className="hide-native-date-picker flex-1"
                     />
                     <Button
                       type="button"
@@ -1102,19 +1151,16 @@ export function PatientListPage() {
                       size="icon"
                       className="h-10 w-10 border-gray-200"
                       onClick={() => openDateTimePicker(createRegistrationDateRef.current)}
-                      title={createForm.registration_date || 'Select registration date and time'}
+                      title="Open registration date and time picker"
                     >
                       <Calendar className="w-4 h-4" />
                     </Button>
-                    <span className="text-sm text-gray-600">
-                      {createForm.registration_date ? createForm.registration_date.replace('T', ' ') : 'Select registration date and time'}
-                    </span>
                   </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-gray-600">Birth Date</label>
-                  <div className="flex items-center gap-3 rounded-md border border-gray-200 bg-white px-3 py-2">
-                    <input
+                  <div className="flex items-center gap-2">
+                    <Input
                       ref={createBirthDateRef}
                       type="date"
                       value={createForm.date_of_birth}
@@ -1128,7 +1174,7 @@ export function PatientListPage() {
                           };
                         })
                       }
-                      className="sr-only"
+                      className="hide-native-date-picker flex-1"
                       required
                     />
                     <Button
@@ -1137,13 +1183,10 @@ export function PatientListPage() {
                       size="icon"
                       className="h-10 w-10 border-gray-200"
                       onClick={() => openDateTimePicker(createBirthDateRef.current)}
-                      title={createForm.date_of_birth || 'Select birth date'}
+                      title="Open birth date picker"
                     >
                       <Calendar className="w-4 h-4" />
                     </Button>
-                    <span className="text-sm text-gray-600">
-                      {createForm.date_of_birth || 'Select birth date'}
-                    </span>
                   </div>
                 </div>
                 <div className="space-y-1">
@@ -1230,7 +1273,7 @@ export function PatientListPage() {
                 variant="secondary"
                 size="icon"
                 className="h-10 w-10 border border-red-200 bg-red-50 text-red-600 hover:border-red-300 hover:bg-red-100 active:bg-red-200"
-                onClick={() => setEditOpen(false)}
+                onClick={closeEditModal}
                 disabled={saving}
               >
                 <X className="w-4 h-4" />
@@ -1257,13 +1300,13 @@ export function PatientListPage() {
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-gray-600">Registration Date &amp; Time</label>
-                  <div className="flex items-center gap-3 rounded-md border border-gray-200 bg-white px-3 py-2">
-                    <input
+                  <div className="flex items-center gap-2">
+                    <Input
                       ref={editRegistrationDateRef}
                       type="datetime-local"
                       value={editForm.registration_date}
                       onChange={(e) => setEditForm((s) => ({ ...s, registration_date: e.target.value }))}
-                      className="sr-only"
+                      className="hide-native-date-picker flex-1"
                     />
                     <Button
                       type="button"
@@ -1271,19 +1314,16 @@ export function PatientListPage() {
                       size="icon"
                       className="h-10 w-10 border-gray-200"
                       onClick={() => openDateTimePicker(editRegistrationDateRef.current)}
-                      title={editForm.registration_date || 'Select registration date and time'}
+                      title="Open registration date and time picker"
                     >
                       <Calendar className="w-4 h-4" />
                     </Button>
-                    <span className="text-sm text-gray-600">
-                      {editForm.registration_date ? editForm.registration_date.replace('T', ' ') : 'Select registration date and time'}
-                    </span>
                   </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-gray-600">Birth Date</label>
-                  <div className="flex items-center gap-3 rounded-md border border-gray-200 bg-white px-3 py-2">
-                    <input
+                  <div className="flex items-center gap-2">
+                    <Input
                       ref={editBirthDateRef}
                       type="date"
                       value={editForm.date_of_birth}
@@ -1297,7 +1337,7 @@ export function PatientListPage() {
                           };
                         })
                       }
-                      className="sr-only"
+                      className="hide-native-date-picker flex-1"
                     />
                     <Button
                       type="button"
@@ -1305,13 +1345,10 @@ export function PatientListPage() {
                       size="icon"
                       className="h-10 w-10 border-gray-200"
                       onClick={() => openDateTimePicker(editBirthDateRef.current)}
-                      title={editForm.date_of_birth || 'Select birth date'}
+                      title="Open birth date picker"
                     >
                       <Calendar className="w-4 h-4" />
                     </Button>
-                    <span className="text-sm text-gray-600">
-                      {editForm.date_of_birth || 'Select birth date'}
-                    </span>
                   </div>
                 </div>
                 <div className="space-y-1">
@@ -1374,7 +1411,7 @@ export function PatientListPage() {
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
-                <Button type="button" variant="secondary" onClick={() => setEditOpen(false)} disabled={saving}>
+                <Button type="button" variant="secondary" onClick={closeEditModal} disabled={saving}>
                   Cancel
                 </Button>
                 <Button type="submit" disabled={saving || !isEditPhoneValid}>
@@ -1387,11 +1424,11 @@ export function PatientListPage() {
       )}
 
       {assignOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-lg max-h-[90vh] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
-              <h3 className="text-xl font-bold text-gray-900">
-                {canOrthoAssignCareTeam ? 'Assign Care Team' : 'Assign Care Team'}
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-2 sm:items-center sm:p-4">
+          <div className="max-h-[94dvh] w-full max-w-3xl overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-4 sm:px-6">
+              <h3 className="text-lg font-bold text-gray-900 sm:text-xl">
+                {canSurgeonAssignStudents ? 'Assign Students' : 'Assign Care Team'}
               </h3>
               <Button
                 type="button"
@@ -1404,8 +1441,8 @@ export function PatientListPage() {
                 <X className="w-4 h-4" />
               </Button>
             </div>
-            <form className="max-h-[calc(90vh-81px)] overflow-y-auto px-6 py-5 space-y-4" onSubmit={handleAssign}>
-              <div className="rounded-xl border border-purple-100 bg-purple-50/60 p-5 space-y-4">
+            <form className="max-h-[calc(94dvh-81px)] space-y-6 overflow-y-auto overscroll-contain px-4 py-5 sm:px-8 sm:py-8" onSubmit={handleAssign}>
+              <div className="min-h-[14rem] space-y-6 rounded-xl border border-purple-100 bg-purple-50/60 p-4 sm:min-h-[20rem] sm:p-8">
                 {canOrthoAssignCareTeam && (
                   <>
                     <MultiSelectDropdown
@@ -1426,7 +1463,17 @@ export function PatientListPage() {
                     />
                   </>
                 )}
-                {!canOrthoAssignCareTeam && (
+                {canSurgeonAssignStudents && (
+                  <MultiSelectDropdown
+                    label="Assign Students"
+                    options={assignableStudents}
+                    selectedIds={assignStudentIds}
+                    onChange={setAssignStudentIds}
+                    placeholder="Select students"
+                    testIdPrefix="assign-students"
+                  />
+                )}
+                {!canOrthoAssignCareTeam && !canSurgeonAssignStudents && (
                   <>
                     <MultiSelectDropdown
                       label="Assign Orthodontists"
@@ -1448,11 +1495,11 @@ export function PatientListPage() {
                 )}
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <Button type="button" variant="secondary" onClick={() => setAssignOpen(false)} disabled={saving}>
+              <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+                <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={() => setAssignOpen(false)} disabled={saving}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={saving}>
+                <Button type="submit" className="w-full sm:w-auto" disabled={saving}>
                   {saving ? 'Saving...' : 'Update Assignments'}
                 </Button>
               </div>

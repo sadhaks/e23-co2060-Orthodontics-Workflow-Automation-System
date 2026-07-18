@@ -1,6 +1,7 @@
 const mysql = require('mysql2/promise');
 const fs = require('fs').promises;
 const path = require('path');
+const { buildMysqlSslConfig } = require('../src/config/mysqlSsl');
 require('dotenv').config();
 
 const databaseName = process.env.DB_NAME || 'orthoflow';
@@ -11,7 +12,8 @@ const dbConfig = {
   port: process.env.DB_PORT || 3306,
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
-  multipleStatements: true
+  multipleStatements: true,
+  ssl: buildMysqlSslConfig()
 };
 
 async function runMigration() {

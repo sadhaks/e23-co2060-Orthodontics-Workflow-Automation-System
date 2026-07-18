@@ -53,11 +53,20 @@ export interface User {
   updated_at: string;
 }
 
+type DepartmentOption = {
+  value: string;
+  label: string;
+  color: string;
+  backgroundColor: string;
+  borderColor: string;
+  aliases?: string[];
+};
+
 const initialUserFormData: CreateUserForm = {
   name: '',
   email: '',
   role: '',
-  department: 'Orthodontics'
+  department: 'Department of Orthodontics'
 };
 
 const UserManagement: React.FC = () => {
@@ -114,8 +123,76 @@ const UserManagement: React.FC = () => {
     { value: 'STUDENT', label: 'Student' }
   ];
 
+  const departments: DepartmentOption[] = [
+    {
+      value: 'Division of Oral Medicine',
+      label: 'Oral Medicine',
+      color: '#0f766e',
+      backgroundColor: '#ccfbf1',
+      borderColor: '#99f6e4'
+    },
+    {
+      value: 'Department of Oral Surgery',
+      label: 'Oral Surgery',
+      color: '#b91c1c',
+      backgroundColor: '#fee2e2',
+      borderColor: '#fecaca'
+    },
+    {
+      value: 'Department of Orthodontics',
+      label: 'Orthodontics',
+      color: '#1d4ed8',
+      backgroundColor: '#dbeafe',
+      borderColor: '#bfdbfe',
+      aliases: ['Orthodontics']
+    },
+    {
+      value: 'Department of Restorative Dentistry',
+      label: 'Restorative Dentistry',
+      color: '#7c2d12',
+      backgroundColor: '#ffedd5',
+      borderColor: '#fed7aa'
+    },
+    {
+      value: 'Department of Prosthodontics',
+      label: 'Prosthodontics',
+      color: '#6d28d9',
+      backgroundColor: '#ede9fe',
+      borderColor: '#ddd6fe'
+    },
+    {
+      value: 'Division of Periodontology',
+      label: 'Periodontology',
+      color: '#047857',
+      backgroundColor: '#d1fae5',
+      borderColor: '#a7f3d0'
+    },
+    {
+      value: 'Division of Pedodontics',
+      label: 'Pedodontics',
+      color: '#c2410c',
+      backgroundColor: '#ffedd5',
+      borderColor: '#fdba74'
+    },
+    {
+      value: 'Department of Oral Pathology',
+      label: 'Oral Pathology',
+      color: '#be123c',
+      backgroundColor: '#ffe4e6',
+      borderColor: '#fecdd3'
+    }
+  ];
+
   const resetUserForm = () => {
     setFormData(initialUserFormData);
+  };
+
+  const normalizeDepartmentValue = (department: string) => {
+    const normalizedDepartment = department?.trim();
+    const match = departments.find((item) =>
+      item.value === normalizedDepartment || item.aliases?.includes(normalizedDepartment)
+    );
+    return match?.value || normalizedDepartment || initialUserFormData.department;
   };
 
   useEffect(() => {
@@ -393,7 +470,7 @@ const UserManagement: React.FC = () => {
       name: user.name,
       email: user.email,
       role: user.role,
-      department: user.department || ''
+      department: normalizeDepartmentValue(user.department)
     });
     setEditDialogOpen(true);
   };
@@ -412,6 +489,21 @@ const UserManagement: React.FC = () => {
 
   const getStatusColor = (status: string) => {
     return status === 'ACTIVE' ? '#4caf50' : '#f44336';
+  };
+
+  const getDepartmentMeta = (department: string) => {
+    const normalizedDepartment = department?.trim();
+    const match = departments.find((item) =>
+      item.value === normalizedDepartment || item.aliases?.includes(normalizedDepartment)
+    );
+
+    return match || {
+      value: normalizedDepartment || '',
+      label: normalizedDepartment || '-',
+      color: '#475569',
+      backgroundColor: '#f1f5f9',
+      borderColor: '#e2e8f0'
+    };
   };
 
   const formatDateDDMMYYYY = (value: string) => {
@@ -474,9 +566,6 @@ const UserManagement: React.FC = () => {
     <Box p={{ xs: 2, md: 3 }}>
       <Typography variant="h4" gutterBottom sx={{ fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>
         User Management
-      </Typography>
-      <Typography variant="body1" sx={{ color: '#64748b', mb: 2.25 }}>
-        Manage hospital users, roles, and account lifecycle.
       </Typography>
 
       {error && (
@@ -629,7 +718,30 @@ const UserManagement: React.FC = () => {
                       sx={{ fontWeight: 700, borderRadius: '999px', px: 0.5, minWidth: 92 }}
                     />
                   </TableCell>
-                  <TableCell sx={{ color: '#475569' }}>{user.department || '-'}</TableCell>
+                  <TableCell>
+                    {user.department ? (
+                      <Chip
+                        label={getDepartmentMeta(user.department).label}
+                        size="small"
+                        sx={{
+                          color: getDepartmentMeta(user.department).color,
+                          backgroundColor: getDepartmentMeta(user.department).backgroundColor,
+                          border: `1px solid ${getDepartmentMeta(user.department).borderColor}`,
+                          fontWeight: 800,
+                          borderRadius: '999px',
+                          px: 0.5,
+                          maxWidth: 210,
+                          '& .MuiChip-label': {
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap'
+                          }
+                        }}
+                      />
+                    ) : (
+                      <Typography variant="body2" sx={{ color: '#94a3b8', fontWeight: 600 }}>-</Typography>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Chip
                       label={user.status}
@@ -815,6 +927,24 @@ const UserManagement: React.FC = () => {
               </Box>
             )}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Department/Division</Typography>
+              <FormControl fullWidth>
+                <Select
+                  value={formData.department}
+                  displayEmpty
+                  onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                  required
+                >
+                  <MenuItem value="" disabled>Select department/division</MenuItem>
+                  {departments.map((department) => (
+                    <MenuItem key={department.value} value={department.value}>
+                      {department.value}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
               <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Role</Typography>
               <FormControl fullWidth>
                 <Select
@@ -838,7 +968,7 @@ const UserManagement: React.FC = () => {
           <Button onClick={() => { setCreateDialogOpen(false); resetUserForm(); }} disabled={creatingUser} variant="outlined" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 700, px: 3, py: 1.2 }}>
             Cancel
           </Button>
-          <Button onClick={handleCreateUser} variant="contained" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 800, px: 3.5, py: 1.2 }} disabled={creatingUser || !formData.name || !formData.email || !formData.role}>
+          <Button onClick={handleCreateUser} variant="contained" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 800, px: 3.5, py: 1.2 }} disabled={creatingUser || !formData.name || !formData.email || !formData.department || !formData.role}>
             {creatingUser ? (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <CircularProgress size={16} color="inherit" />
@@ -909,6 +1039,24 @@ const UserManagement: React.FC = () => {
               To reset this user&apos;s password, close this dialog and use the <strong>Reset Password</strong> action.
             </Alert>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Department/Division</Typography>
+              <FormControl fullWidth>
+                <Select
+                  value={formData.department}
+                  displayEmpty
+                  onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                  required
+                >
+                  <MenuItem value="" disabled>Select department/division</MenuItem>
+                  {departments.map((department) => (
+                    <MenuItem key={department.value} value={department.value}>
+                      {department.value}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
               <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>Role</Typography>
               <FormControl fullWidth>
                 <Select
@@ -932,7 +1080,7 @@ const UserManagement: React.FC = () => {
           <Button onClick={() => setEditDialogOpen(false)} variant="outlined" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 700, px: 3, py: 1.2 }}>
             Cancel
           </Button>
-          <Button onClick={handleUpdateUser} variant="contained" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 800, px: 3.5, py: 1.2 }} disabled={!formData.name || !formData.email || !formData.role}>
+          <Button onClick={handleUpdateUser} variant="contained" sx={{ borderRadius: '14px', textTransform: 'none', fontWeight: 800, px: 3.5, py: 1.2 }} disabled={!formData.name || !formData.email || !formData.department || !formData.role}>
             Update User
           </Button>
         </DialogActions>

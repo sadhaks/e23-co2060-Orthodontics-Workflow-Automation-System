@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Badge, Button, Table, Input, RefreshButton } from '../components/UI';
-import { Plus, Search, Trash2, RotateCcw, Pencil, X } from 'lucide-react';
+import { AlertTriangle, Package, PackageX, Plus, Search, Trash2, RotateCcw, Pencil, X, PackagePlus } from 'lucide-react';
 import { apiService } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -162,6 +162,8 @@ export function InventoryPage() {
     if (level === 'OUT_OF_STOCK') return 'error';
     return 'warning';
   };
+
+  const alertLabel = (level: InventoryItem['alert_level']) => level.replace(/_/g, ' ');
 
   const resetEditor = () => {
     setEditingId(null);
@@ -398,34 +400,25 @@ export function InventoryPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Materials & Inventory</h2>
-          <p className="text-gray-500">Live inventory with stock updates and alerts.</p>
         </div>
-        <div className="flex gap-2">
-          <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
-            <button
-              type="button"
-              className={`px-3 h-10 text-sm ${deletedMode === 'active' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'}`}
-              onClick={() => setDeletedMode('active')}
-            >
-              Active
-            </button>
-            <button
-              type="button"
-              className={`px-3 h-10 text-sm border-l border-gray-200 ${deletedMode === 'trashed' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'}`}
-              onClick={() => setDeletedMode('trashed')}
-            >
-              Recycle Bin
-            </button>
-          </div>
-          <RefreshButton onClick={loadInventory} loading={loading} />
+        <div className="flex flex-wrap gap-2">
           {canMutateInventory && deletedMode === 'active' && (
             <Button className="flex items-center gap-2" onClick={openCreateEditor}>
               <Plus className="w-4 h-4" /> Add Material
             </Button>
           )}
+          <Button
+            variant="secondary"
+            onClick={() => setDeletedMode(deletedMode === 'active' ? 'trashed' : 'active')}
+            className="border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 active:bg-blue-200"
+          >
+            <Trash2 className="w-4 h-4 mr-1" />
+            {deletedMode === 'active' ? 'View Trash' : 'View Active'}
+          </Button>
+          <RefreshButton onClick={loadInventory} loading={loading} />
         </div>
       </div>
 
@@ -437,18 +430,27 @@ export function InventoryPage() {
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="p-6">
-          <p className="text-sm text-gray-500">Total SKU Items</p>
-          <p className="text-2xl font-bold">{stats?.total_items ?? 0}</p>
+      <div className="grid grid-cols-3 gap-3">
+        <Card className="min-h-[104px] p-4">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs font-medium leading-tight text-gray-500 sm:text-sm">Total SKU Items</p>
+            <Package className="h-4 w-4 shrink-0 text-gray-900 sm:h-5 sm:w-5" />
+          </div>
+          <p className="mt-2 text-2xl font-extrabold leading-none text-gray-900 sm:text-3xl">{stats?.total_items ?? 0}</p>
         </Card>
-        <Card className="p-6">
-          <p className="text-sm text-gray-500">Low Stock Alerts</p>
-          <p className="text-2xl font-bold text-amber-600">{stats?.low_stock ?? 0}</p>
+        <Card className="min-h-[104px] p-4">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs font-medium leading-tight text-gray-500 sm:text-sm">Low Stock Alerts</p>
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 sm:h-5 sm:w-5" />
+          </div>
+          <p className="mt-2 text-2xl font-extrabold leading-none text-amber-600 sm:text-3xl">{stats?.low_stock ?? 0}</p>
         </Card>
-        <Card className="p-6">
-          <p className="text-sm text-gray-500">Out of Stock</p>
-          <p className="text-2xl font-bold text-red-600">{stats?.out_of_stock ?? 0}</p>
+        <Card className="min-h-[104px] p-4">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs font-medium leading-tight text-gray-500 sm:text-sm">Out of Stock</p>
+            <PackageX className="h-4 w-4 shrink-0 text-red-600 sm:h-5 sm:w-5" />
+          </div>
+          <p className="mt-2 text-2xl font-extrabold leading-none text-red-600 sm:text-3xl">{stats?.out_of_stock ?? 0}</p>
         </Card>
       </div>
 
@@ -487,7 +489,7 @@ export function InventoryPage() {
                 <td className="px-6 py-4 text-gray-800 font-semibold">{item.quantity} {item.unit}</td>
                 <td className="px-6 py-4 text-gray-500">{item.minimum_threshold} {item.unit}</td>
                 {deletedMode === 'active' && (
-                  <td className="px-6 py-4"><Badge variant={alertVariant(item.alert_level) as any}>{item.alert_level}</Badge></td>
+                  <td className="px-6 py-4"><Badge variant={alertVariant(item.alert_level) as any}>{alertLabel(item.alert_level)}</Badge></td>
                 )}
                 <td className="px-6 py-4">
                   {canMutateInventory && deletedMode === 'active' ? (
@@ -497,7 +499,7 @@ export function InventoryPage() {
                         variant="secondary"
                         disabled={stockUpdatingId === item.id || processingId === item.id}
                         onClick={() => openEditEditor(item)}
-                        className="h-9 px-3"
+                        className="h-9 px-3 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 active:bg-blue-200"
                       >
                         <Pencil className="w-3 h-3 mr-1" />
                         Edit
@@ -507,7 +509,9 @@ export function InventoryPage() {
                         variant="secondary"
                         disabled={stockUpdatingId === item.id || processingId === item.id}
                         onClick={() => restock(item.id)}
+                        className="h-9 px-3 border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 active:bg-emerald-200"
                       >
+                        <PackagePlus className="w-3 h-3 mr-1" />
                         Restock
                       </Button>
                       <Button
@@ -538,6 +542,7 @@ export function InventoryPage() {
                         disabled={processingId === item.id}
                         onClick={() => permanentlyDeleteItem(item.id, item.name)}
                       >
+                        <Trash2 className="w-3 h-3 mr-1" />
                         Delete Permanently
                       </Button>
                     </div>
